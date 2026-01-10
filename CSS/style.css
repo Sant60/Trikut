@@ -310,6 +310,18 @@ footer {
   padding: 18px 0;
 }
 
+/* form error styles */
+.input-error {
+  border-color: #e74c3c !important;
+  box-shadow: 0 0 0 3px rgba(231, 76, 60, 0.08);
+}
+.error-msg {
+  color: #e74c3c;
+  font-size: 13px;
+  margin-top: 6px;
+  display: block;
+}
+
 .muted {
   color: var(--muted);
   font-size: 14px;

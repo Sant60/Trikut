@@ -1,42 +1,67 @@
 <?php
-require "includes/db.php";
+require __DIR__ . '/includes/db.php';
 
-$data = json_decode(file_get_contents("php://input"), true);
+header('Content-Type: application/json; charset=utf-8');
 
-$name  = trim($data['name']);
-$phone = trim($data['phone']);
-$cart  = $data['cart'];
-
-$total = 0;
-$itemsArr = [];
-
-foreach ($cart as $item) {
-  $lineTotal = $item['price'] * $item['qty'];
-  $total += $lineTotal;
-  $itemsArr[] = $item['name']." x".$item['qty']." = ₹".$lineTotal;
+$raw = file_get_contents('php://input');
+if (!$raw) {
+    echo json_encode(['success' => false, 'message' => 'Empty request']);
+    exit;
 }
 
-$itemsText = implode(", ", $itemsArr);
+$data = json_decode($raw, true);
+if (!is_array($data)) {
+    echo json_encode(['success' => false, 'message' => 'Invalid JSON']);
+    exit;
+}
 
-/* ---- SAVE TO DB ---- */
-$stmt = $pdo->prepare(
-  "INSERT INTO orders (customer_name, customer_phone, items, total)
-   VALUES (?,?,?,?)"
-);
-$stmt->execute([$name, $phone, $itemsText, $total]);
+$name = trim($data['name'] ?? '');
+$phone = trim($data['phone'] ?? '');
+$cart = $data['cart'] ?? [];
 
-/* ---- WHATSAPP MESSAGE ---- */
-$owner = "919419117903"; // OWNER NUMBER (country code ke sath)
+if ($name === '' || !preg_match('/^[\p{L} ]{2,}$/u', $name)) {
+    echo json_encode(['success' => false, 'message' => 'Invalid name']);
+    exit;
+}
+if (!preg_match('/^[6-9]\d{9}$/', $phone)) {
+    echo json_encode(['success' => false, 'message' => 'Invalid phone']);
+    exit;
+}
+if (!is_array($cart) || count($cart) === 0) {
+    echo json_encode(['success' => false, 'message' => 'Cart empty']);
+    exit;
+}
 
-$msg = urlencode(
-  "🍽 NEW ORDER\n\n".
-  "Name: $name\n".
-  "Phone: $phone\n\n".
-  "Items:\n".implode("\n",$itemsArr)."\n\n".
-  "Total: ₹$total"
-);
+// compute total from submitted cart (trust but sanitize)
+$total = 0;
+$items_summary = [];
+foreach ($cart as $c) {
+    $price = floatval($c['price'] ?? 0);
+    $qty = intval($c['qty'] ?? 0);
+    if ($qty <= 0) $qty = 1;
+    $total += $price * $qty;
+    $items_summary[] = ($c['name'] ?? 'Item') . " x{$qty}";
+}
 
-echo json_encode([
-  "success" => true,
-  "whatsapp" => "https://wa.me/$owner?text=$msg"
-]);
+$items_json = json_encode($cart, JSON_UNESCAPED_UNICODE);
+
+try {
+    $stmt = $pdo->prepare("INSERT INTO orders (name, phone, total, items, created_at, status) VALUES (?,?,?,?,NOW(),?)");
+    $stmt->execute([$name, $phone, $total, $items_json, 'new']);
+    $orderId = $pdo->lastInsertId();
+} catch (Throwable $e) {
+    error_log('Order insert failed: ' . $e->getMessage());
+    echo json_encode(['success' => false, 'message' => 'DB error']);
+    exit;
+}
+
+$msg  = "New Order (#{$orderId})%0A";
+$msg .= "Name: " . rawurlencode($name) . "%0A";
+$msg .= "Phone: " . rawurlencode($phone) . "%0A";
+$msg .= "Items: " . rawurlencode(implode(', ', $items_summary)) . "%0A";
+$msg .= "Total: ₹" . rawurlencode(number_format($total,2));
+
+$whatsapp = "https://wa.me/91YOUR_NUMBER?text={$msg}"; // replace YOUR_NUMBER
+
+echo json_encode(['success' => true, 'order_id' => $orderId, 'whatsapp' => $whatsapp]);
+exit;

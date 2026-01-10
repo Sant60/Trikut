@@ -184,16 +184,153 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   });
 
-  // order now
+  /* ===== FORM VALIDATION (applies to all forms and standalone inputs) ===== */
+  function showError(input, message) {
+    if (!input) return;
+    clearError(input);
+    input.classList.add("input-error");
+    const msg = document.createElement("span");
+    msg.className = "error-msg";
+    msg.innerText = message;
+    input.insertAdjacentElement("afterend", msg);
+  }
+
+  function clearError(input) {
+    if (!input) return;
+    input.classList.remove("input-error");
+    const next = input.nextElementSibling;
+    if (next && next.classList && next.classList.contains("error-msg"))
+      next.remove();
+  }
+
+  function validateField(input) {
+    if (!input) return true;
+    clearError(input);
+    const val = (input.value || "").trim();
+
+    if (input.hasAttribute("required") && !val) {
+      showError(input, "This field is required");
+      return false;
+    }
+
+    if (input.type === "tel" && val) {
+      const re = /^\d{10,15}$/;
+      if (!re.test(val)) {
+        showError(input, "Enter a valid phone number (10–15 digits)");
+        return false;
+      }
+    }
+
+    if (input.type === "datetime-local" && val) {
+      const selected = new Date(val);
+      const now = new Date();
+      if (isNaN(selected.getTime())) {
+        showError(input, "Invalid date/time");
+        return false;
+      }
+      if (selected.getTime() < now.getTime() - 60000) {
+        showError(input, "Select a future date and time");
+        return false;
+      }
+    }
+
+    if (input.type === "number" && val) {
+      const num = Number(val);
+      const min = input.hasAttribute("min")
+        ? Number(input.getAttribute("min"))
+        : null;
+      if (min !== null && num < min) {
+        showError(input, `Value must be at least ${min}`);
+        return false;
+      }
+    }
+
+    if (input.hasAttribute("pattern") && val) {
+      const p = input.getAttribute("pattern");
+      try {
+        const re = new RegExp("^" + p + "$");
+        if (!re.test(val)) {
+          showError(input, "Invalid format");
+          return false;
+        }
+      } catch (e) {
+        // ignore invalid pattern
+      }
+    }
+
+    return true;
+  }
+
+  // validate all forms on submit
+  document.querySelectorAll("form").forEach((form) => {
+    form.addEventListener("submit", (e) => {
+      let valid = true;
+      const inputs = Array.from(
+        form.querySelectorAll("input, textarea, select")
+      );
+      for (const inp of inputs) {
+        if (!validateField(inp)) valid = false;
+      }
+      if (!valid) {
+        e.preventDefault();
+        const firstErr = form.querySelector(".input-error");
+        if (firstErr) firstErr.focus();
+      }
+    });
+
+    // live validation
+    form.addEventListener("input", (ev) => {
+      const target = ev.target;
+      if (
+        target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.tagName === "SELECT")
+      ) {
+        validateField(target);
+      }
+    });
+
+    form.addEventListener(
+      "blur",
+      (ev) => {
+        const target = ev.target;
+        if (
+          target &&
+          (target.tagName === "INPUT" ||
+            target.tagName === "TEXTAREA" ||
+            target.tagName === "SELECT")
+        ) {
+          validateField(target);
+        }
+      },
+      true
+    );
+  });
+
+  // order now (validates standalone inputs before placing order)
   const orderBtn = document.getElementById("orderNowBtn");
   if (orderBtn) {
-    orderBtn.addEventListener("click", () => {
-      if (cart.length === 0) return alert("Cart is empty");
+    orderBtn.addEventListener("click", (e) => {
       const nameInput = document.getElementById("custName");
       const phoneInput = document.getElementById("custPhone");
+      const validName = validateField(nameInput);
+      const validPhone = validateField(phoneInput);
+
+      if (!validName || !validPhone) {
+        e.preventDefault();
+        alert("Please fix highlighted fields before ordering.");
+        return;
+      }
+
+      if (cart.length === 0) {
+        e.preventDefault();
+        alert("Cart is empty");
+        return;
+      }
+
       const name = nameInput.value.trim();
       const phone = phoneInput.value.trim();
-      if (!name || !phone) return alert("Please enter name & phone");
 
       fetch("place_order.php", {
         method: "POST",

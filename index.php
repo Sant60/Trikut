@@ -1,3 +1,4 @@
+
 <?php
 require "includes/db.php";
 ?>
@@ -8,10 +9,7 @@ require "includes/db.php";
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Trikut Restaurant & Cafe — Demo</title>
 <link rel="stylesheet" href="./CSS/style.css">
-  <!-- ===== CSS SAME AS YOUR HTML ===== -->
-  <style>
-   
-  </style>
+ 
 </head>
 
 <body>
@@ -133,11 +131,11 @@ require "includes/db.php";
     <div class="card" id="book">
       <h3>Reserve a Table</h3>
 
-      <form method="post" action="includes/save_booking.php">
-        <input name="name" placeholder="Name" required><br><br>
-        <input name="phone" placeholder="Phone" required><br><br>
-        <input type="datetime-local" name="date" required><br><br>
-        <input type="number" name="size" value="2"><br><br>
+      <form id="bookingForm" method="post" action="includes/save_booking.php" novalidate>
+        <input id="bookName" name="name" placeholder="Name" required><br><br>
+        <input id="bookPhone" type="tel" name="phone" placeholder="Phone" pattern="\d{10,15}" required><br><br>
+        <input id="bookDate" type="datetime-local" name="date" required><br><br>
+        <input id="bookSize" type="number" name="size" value="2" min="1"><br><br>
         <button type="submit">Reserve</button>
       </form>
 
@@ -154,8 +152,8 @@ require "includes/db.php";
     <strong id="cartTotal">₹0</strong>
   </div>
 
-  <input id="custName" placeholder="Your Name">
-  <input id="custPhone" placeholder="Mobile Number">
+  <input id="custName" placeholder="Your Name" required>
+  <input id="custPhone" type="tel" placeholder="Mobile Number" pattern="\d{10,15}" required>
 
   <button id="orderNowBtn">Order Now</button>
 </div>
