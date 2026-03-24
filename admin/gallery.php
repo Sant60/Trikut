@@ -3,24 +3,37 @@ require_once __DIR__ . '/../includes/auth.php';
 require_once __DIR__ . '/../includes/db.php';
 require_once __DIR__ . '/../includes/app.php';
 require_once __DIR__ . '/../includes/media.php';
+require_once __DIR__ . '/../includes/security.php';
+require_once __DIR__ . '/../includes/admin_profile.php';
+require_once __DIR__ . '/../includes/tenant.php';
 
 $errors = [];
 $projectRoot = dirname(__DIR__);
 $galleryDir = $projectRoot . '/assets/gallery';
 $galleryPublicDir = '/assets/gallery';
+$currentAdminId = (int) $_SESSION['admin'];
+ensure_multi_admin_schema($pdo);
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (!verify_csrf_request()) {
+        $errors[] = 'Invalid request token.';
+    }
+
     $action = $_POST['action'] ?? '';
 
-    if ($action === 'add') {
-        $caption = trim($_POST['caption'] ?? '');
+    if (empty($errors) && $action === 'add') {
+        $caption = normalize_text($_POST['caption'] ?? '', 255);
         $imgUrl = normalize_storage_path($_POST['img'] ?? '');
         $uploadedCount = 0;
 
+        if ($imgUrl !== '' && !is_valid_storage_or_http_path($imgUrl)) {
+            $errors[] = 'Image URL or path is invalid.';
+        }
+
         if ($imgUrl !== '') {
             try {
-                $stmt = $pdo->prepare('INSERT INTO gallery (img, caption, created_at) VALUES (?, ?, NOW())');
-                $stmt->execute([$imgUrl, $caption ?: null]);
+                $stmt = $pdo->prepare('INSERT INTO gallery (admin_id, img, caption, created_at) VALUES (?, ?, ?, NOW())');
+                $stmt->execute([$currentAdminId, $imgUrl, $caption ?: null]);
                 $uploadedCount++;
             } catch (Throwable $e) {
                 $errors[] = 'Database error while saving URL image.';
@@ -44,8 +57,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
 
                 try {
-                    $stmt = $pdo->prepare('INSERT INTO gallery (img, caption, created_at) VALUES (?, ?, NOW())');
-                    $stmt->execute([$storedPath, $caption ?: null]);
+                    $stmt = $pdo->prepare('INSERT INTO gallery (admin_id, img, caption, created_at) VALUES (?, ?, ?, NOW())');
+                    $stmt->execute([$currentAdminId, $storedPath, $caption ?: null]);
                     $uploadedCount++;
                 } catch (Throwable $e) {
                     $errors[] = 'Database error while saving uploaded image.';
@@ -62,19 +75,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             header('Location: gallery.php');
             exit;
         }
-    } elseif ($action === 'delete') {
+    } elseif (empty($errors) && $action === 'delete') {
         $id = (int) ($_POST['id'] ?? 0);
         if ($id > 0) {
             try {
-                $stmt = $pdo->prepare('SELECT img FROM gallery WHERE id = ? LIMIT 1');
-                $stmt->execute([$id]);
+                $stmt = $pdo->prepare('SELECT img FROM gallery WHERE id = ? AND admin_id = ? LIMIT 1');
+                $stmt->execute([$id, $currentAdminId]);
                 $row = $stmt->fetch(PDO::FETCH_ASSOC);
                 if ($row) {
                     remove_local_project_file($row['img'] ?? '', $projectRoot);
                 }
 
-                $stmt = $pdo->prepare('DELETE FROM gallery WHERE id = ? LIMIT 1');
-                $stmt->execute([$id]);
+                $stmt = $pdo->prepare('DELETE FROM gallery WHERE id = ? AND admin_id = ? LIMIT 1');
+                $stmt->execute([$id, $currentAdminId]);
             } catch (Throwable $e) {
                 $errors[] = 'Failed to delete gallery image.';
             }
@@ -87,22 +100,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 $items = [];
 try {
-    $stmt = $pdo->query('SELECT id, img, caption, created_at FROM gallery ORDER BY id DESC');
+    $stmt = $pdo->prepare('SELECT id, img, caption, created_at FROM gallery WHERE admin_id = ? ORDER BY id DESC');
+    $stmt->execute([$currentAdminId]);
     $items = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Throwable $e) {
     $items = [];
 }
 
-$adminName = 'Admin';
-try {
-    $stmt = $pdo->prepare('SELECT username FROM admins WHERE id = ? LIMIT 1');
-    $stmt->execute([$_SESSION['admin']]);
-    $row = $stmt->fetch(PDO::FETCH_ASSOC);
-    if ($row && !empty($row['username'])) {
-        $adminName = $row['username'];
-    }
-} catch (Throwable $e) {
-}
+ensure_admin_profile_schema($pdo);
+$adminProfile = fetch_admin_profile($pdo, (int) $_SESSION['admin']) ?? [];
+$adminName = $adminProfile['display_name'] ?? ($adminProfile['username'] ?? 'Admin');
+$adminMobile = $adminProfile['mobile'] ?? '';
+$adminPhotoUrl = !empty($adminProfile['photo']) ? app_url($adminProfile['photo']) : '';
 ?>
 <!doctype html>
 <html lang="en">
@@ -110,16 +119,42 @@ try {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Admin - Gallery - Trikut</title>
-  <link rel="stylesheet" href="../CSS/style.css">
+  <script>
+    (function () {
+      try {
+        var savedTheme = localStorage.getItem("admin-theme");
+        if (savedTheme === "dark" || savedTheme === "light") {
+          document.documentElement.setAttribute("data-theme", savedTheme);
+        }
+      } catch (e) {}
+    })();
+  </script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/7.0.1/css/all.min.css">
+  <link rel="stylesheet" href="../CSS/style.css?v=<?php echo (int) (@filemtime(__DIR__ . '/../CSS/style.css') ?: time()); ?>">
 </head>
 <body class="admin-body">
   <div class="admin-shell">
     <aside class="admin-sidebar" aria-label="Admin menu">
       <div class="admin-brand">Trikut - Admin</div>
-      <div class="admin-greeting">Hello, <?php echo htmlspecialchars($adminName, ENT_QUOTES); ?></div>
+      <button class="theme-toggle admin-theme-toggle" type="button" data-theme-toggle data-theme-storage="admin-theme" aria-pressed="false" aria-label="Switch to dark mode" title="Toggle admin light and dark mode">
+        <i class="fa-solid fa-toggle-off" aria-hidden="true"></i>
+        <i class="fa-solid fa-toggle-on" aria-hidden="true"></i>
+      </button>
+      <a class="admin-profile-card" href="profile.php">
+        <?php if ($adminPhotoUrl !== ''): ?>
+          <img class="admin-profile-photo" src="<?php echo htmlspecialchars($adminPhotoUrl, ENT_QUOTES); ?>" alt="<?php echo htmlspecialchars($adminName, ENT_QUOTES); ?>">
+        <?php else: ?>
+          <div class="admin-profile-fallback"><?php echo htmlspecialchars(strtoupper(substr((string) $adminName, 0, 1)), ENT_QUOTES); ?></div>
+        <?php endif; ?>
+        <div class="admin-profile-copy">
+          <strong><?php echo htmlspecialchars($adminName, ENT_QUOTES); ?></strong>
+          <span class="admin-muted"><?php echo htmlspecialchars($adminMobile ?: 'No mobile set', ENT_QUOTES); ?></span>
+        </div>
+      </a>
       <nav class="admin-nav">
         <a href="dashboard.php">Dashboard</a>
         <a href="menu.php">Menu</a>
+        <a href="hero.php">Hero Image</a>
         <a href="orders.php">Orders</a>
         <a href="bookings.php">Bookings</a>
         <a class="is-active" href="gallery.php">Gallery</a>
@@ -145,21 +180,22 @@ try {
             <?php endforeach; ?>
           </div>
         <?php endif; ?>
-        <form method="post" enctype="multipart/form-data">
+        <form method="post" enctype="multipart/form-data" novalidate data-validate-form>
+          <?php echo csrf_input(); ?>
           <input type="hidden" name="action" value="add">
           <div class="admin-form-grid">
           <div class="admin-field">
             <label>Caption (optional)</label>
-            <input name="caption">
+            <input name="caption" maxlength="255">
           </div>
           <div class="admin-field">
             <label>Image URL (optional)</label>
-            <input name="img" placeholder="https://... or /assets/gallery/...">
+            <input name="img" type="url" data-require-one="gallery-source" placeholder="https://... or /assets/gallery/...">
             <small>You can save one URL image without uploading a file.</small>
           </div>
           <div class="admin-field">
             <label>Upload Gallery Images</label>
-            <input type="file" name="images[]" accept="image/jpeg,image/png,image/webp" multiple>
+            <input type="file" name="images[]" data-require-one="gallery-source" accept="image/jpeg,image/png,image/webp" multiple>
             <small>Select as many images as you want. Each image will be saved as its own gallery item.</small>
           </div>
           </div>
@@ -187,6 +223,7 @@ try {
                 <div class="admin-muted" style="font-size:12px;margin-top:4px"><?php echo htmlspecialchars($it['created_at'] ?? '-', ENT_QUOTES); ?></div>
                 <div style="margin-top:8px">
                   <form method="post" style="display:inline" onsubmit="return confirm('Delete this photo?');">
+                    <?php echo csrf_input(); ?>
                     <input type="hidden" name="action" value="delete">
                     <input type="hidden" name="id" value="<?php echo (int) $it['id']; ?>">
                     <button class="admin-btn-danger" type="submit">Delete</button>
@@ -199,5 +236,7 @@ try {
       </section>
     </main>
   </div>
+  <script src="../Script/theme.js?v=<?php echo (int) (@filemtime(__DIR__ . '/../Script/theme.js') ?: time()); ?>"></script>
+  <script src="../Script/form-validation.js?v=<?php echo (int) (@filemtime(__DIR__ . '/../Script/form-validation.js') ?: time()); ?>"></script>
 </body>
 </html>

@@ -2,22 +2,32 @@
 require_once __DIR__ . '/../includes/auth.php';
 require_once __DIR__ . '/../includes/db.php';
 require_once __DIR__ . '/../includes/app.php';
+require_once __DIR__ . '/../includes/security.php';
+require_once __DIR__ . '/../includes/tenant.php';
+
+ensure_multi_admin_schema($pdo);
+$currentAdminId = (int) $_SESSION['admin'];
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
     $id = (int) ($_POST['id'] ?? 0);
 
+    if (!verify_csrf_request()) {
+        http_response_code(419);
+        exit('Invalid request token.');
+    }
+
     if ($id > 0 && $action === 'delete') {
-        $stmt = $pdo->prepare('DELETE FROM bookings WHERE id = ? LIMIT 1');
-        $stmt->execute([$id]);
+        $stmt = $pdo->prepare('DELETE FROM bookings WHERE id = ? AND admin_id = ? LIMIT 1');
+        $stmt->execute([$id, $currentAdminId]);
     }
 
     header('Location: bookings.php');
     exit;
 }
 
-$stmt = $pdo->prepare('SELECT id, name, phone, date, size, created_at FROM bookings ORDER BY id DESC');
-$stmt->execute();
+$stmt = $pdo->prepare('SELECT id, name, phone, date, size, created_at FROM bookings WHERE admin_id = ? ORDER BY id DESC');
+$stmt->execute([$currentAdminId]);
 $bookings = $stmt->fetchAll(PDO::FETCH_ASSOC);
 ?>
 <!doctype html>
@@ -26,7 +36,18 @@ $bookings = $stmt->fetchAll(PDO::FETCH_ASSOC);
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Admin - Bookings</title>
-  <link rel="stylesheet" href="../CSS/style.css">
+  <script>
+    (function () {
+      try {
+        var savedTheme = localStorage.getItem("admin-theme");
+        if (savedTheme === "dark" || savedTheme === "light") {
+          document.documentElement.setAttribute("data-theme", savedTheme);
+        }
+      } catch (e) {}
+    })();
+  </script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/7.0.1/css/all.min.css">
+  <link rel="stylesheet" href="../CSS/style.css?v=<?php echo (int) (@filemtime(__DIR__ . '/../CSS/style.css') ?: time()); ?>">
 </head>
 <body class="admin-body">
   <div class="admin-page">
@@ -36,6 +57,10 @@ $bookings = $stmt->fetchAll(PDO::FETCH_ASSOC);
         <h1 class="admin-title">Bookings</h1>
         <div class="admin-subtitle">All reserve-table requests are stored here for the restaurant team.</div>
       </div>
+      <button class="theme-toggle admin-theme-toggle" type="button" data-theme-toggle data-theme-storage="admin-theme" aria-pressed="false" aria-label="Switch to dark mode" title="Toggle admin light and dark mode">
+        <i class="fa-solid fa-toggle-off" aria-hidden="true"></i>
+        <i class="fa-solid fa-toggle-on" aria-hidden="true"></i>
+      </button>
     </div>
 
     <div class="admin-card">
@@ -78,6 +103,7 @@ $bookings = $stmt->fetchAll(PDO::FETCH_ASSOC);
                   </td>
                   <td>
                     <form method="post" onsubmit="return confirm('Delete this booking?');">
+                      <?php echo csrf_input(); ?>
                       <input type="hidden" name="id" value="<?php echo (int) $booking['id']; ?>">
                       <input type="hidden" name="action" value="delete">
                       <button class="admin-btn-danger" type="submit">Delete</button>
@@ -91,5 +117,6 @@ $bookings = $stmt->fetchAll(PDO::FETCH_ASSOC);
       <?php endif; ?>
     </div>
   </div>
+  <script src="../Script/theme.js?v=<?php echo (int) (@filemtime(__DIR__ . '/../Script/theme.js') ?: time()); ?>"></script>
 </body>
 </html>

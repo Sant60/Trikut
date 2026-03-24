@@ -1,26 +1,42 @@
 <?php
 require_once __DIR__ . '/includes/db.php';
 require_once __DIR__ . '/includes/app.php';
+require_once __DIR__ . '/includes/hero_media.php';
+require_once __DIR__ . '/includes/security.php';
+require_once __DIR__ . '/includes/tenant.php';
 
 $frontend_menu = [];
+$homepage_menu = [];
 $frontend_gallery = [];
+$frontend_hero = null;
 $bookingStatus = $_GET['booking'] ?? '';
 $bookingError = isset($_GET['booking_err']);
 $bookingInvoice = trim((string) ($_GET['booking_invoice'] ?? ''));
 $logoPath = __DIR__ . '/assets/logo.png';
 $hasLogo = is_file($logoPath);
+$styleVersion = @filemtime(__DIR__ . '/CSS/style.css') ?: time();
+$scriptVersion = @filemtime(__DIR__ . '/Script/script.js') ?: time();
+$publicAdminId = resolve_public_admin_id($pdo);
 
 try {
-    $menuStmt = $pdo->prepare('SELECT id, name, description, price, img FROM menu WHERE active = 1 ORDER BY id ASC');
-    $menuStmt->execute();
+    $menuStmt = $pdo->prepare('SELECT id, name, description, price, img FROM menu WHERE admin_id = ? AND active = 1 ORDER BY id ASC');
+    $menuStmt->execute([$publicAdminId]);
     $frontend_menu = $menuStmt->fetchAll(PDO::FETCH_ASSOC);
+    $homepage_menu = array_slice($frontend_menu, 0, 4);
 } catch (Throwable $e) {
     $frontend_menu = [];
+    $homepage_menu = [];
 }
 
 try {
-    $galleryStmt = $pdo->prepare('SELECT id, img, caption FROM gallery ORDER BY id DESC');
-    $galleryStmt->execute();
+    $frontend_hero = fetch_current_hero_media($pdo, $publicAdminId);
+} catch (Throwable $e) {
+    $frontend_hero = null;
+}
+
+try {
+    $galleryStmt = $pdo->prepare('SELECT id, img, caption FROM gallery WHERE admin_id = ? ORDER BY id DESC');
+    $galleryStmt->execute([$publicAdminId]);
     $frontend_gallery = $galleryStmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Throwable $e) {
     $frontend_gallery = [];
@@ -32,9 +48,20 @@ try {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Trikut Restaurant &amp; Cafe</title>
-  <link rel="stylesheet" href="CSS/style.css">
+  <script>
+    (function () {
+      try {
+        var savedTheme = localStorage.getItem("trikut-theme");
+        if (savedTheme === "dark" || savedTheme === "light") {
+          document.documentElement.setAttribute("data-theme", savedTheme);
+        }
+      } catch (e) {}
+    })();
+  </script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/7.0.1/css/all.min.css">
+  <link rel="stylesheet" href="CSS/style.css?v=<?php echo (int) $styleVersion; ?>">
 </head>
-<body<?php echo $bookingInvoice !== '' ? ' data-booking-invoice="' . htmlspecialchars(app_url($bookingInvoice), ENT_QUOTES) . '"' : ''; ?>>
+<body<?php echo $bookingInvoice !== '' ? ' data-booking-invoice="' . htmlspecialchars(app_url($bookingInvoice), ENT_QUOTES) . '"' : ''; ?> data-csrf-token="<?php echo htmlspecialchars(csrf_token(), ENT_QUOTES); ?>">
   <header class="site-header">
     <div class="container topbar">
       <div class="brand">
@@ -47,11 +74,23 @@ try {
         <?php endif; ?>
         <div>
           <div class="eyebrow">Trikut Restaurant &amp; Cafe</div>
-          <strong class="brand-title">Mountain-side food with a modern cafe feel.</strong>
         </div>
       </div>
 
       <div class="nav-shell">
+        <button
+          class="theme-toggle"
+          id="themeToggle"
+          type="button"
+          data-theme-toggle
+          data-theme-storage="trikut-theme"
+          aria-pressed="false"
+          aria-label="Switch to dark mode"
+          title="Toggle light and dark mode"
+        >
+          <i class="fa-solid fa-toggle-off" aria-hidden="true"></i>
+          <i class="fa-solid fa-toggle-on" aria-hidden="true"></i>
+        </button>
         <button
           class="nav-toggle"
           type="button"
@@ -59,12 +98,11 @@ try {
           aria-controls="primaryNav"
           aria-label="Toggle navigation"
         >
-          <span></span>
-          <span></span>
-          <span></span>
+          <i class="fa-solid fa-bars" aria-hidden="true"></i>
+          <i class="fa-solid fa-xmark" aria-hidden="true"></i>
         </button>
         <nav id="primaryNav" class="main-nav" aria-label="Primary">
-          <a href="#menu">Menu</a>
+          <a href="<?php echo htmlspecialchars(app_url('menu.php'), ENT_QUOTES); ?>">Menu</a>
           <a href="#gallery">Gallery</a>
           <a href="#experience">Experience</a>
           <a class="cta" href="#book">Reserve</a>
@@ -103,7 +141,9 @@ try {
         </div>
 
         <div class="hero-visual">
-          <?php if (!empty($frontend_gallery)): ?>
+          <?php if ($frontend_hero && !empty($frontend_hero['img'])): ?>
+            <img class="hero-image" src="<?php echo htmlspecialchars(app_url($frontend_hero['img']), ENT_QUOTES); ?>" alt="<?php echo htmlspecialchars($frontend_hero['caption'] ?? 'Restaurant hero image', ENT_QUOTES); ?>">
+          <?php elseif (!empty($frontend_gallery)): ?>
             <?php $heroImage = app_url($frontend_gallery[0]['img'] ?? ''); ?>
             <img class="hero-image" src="<?php echo htmlspecialchars($heroImage, ENT_QUOTES); ?>" alt="<?php echo htmlspecialchars($frontend_gallery[0]['caption'] ?? 'Restaurant interior', ENT_QUOTES); ?>">
           <?php else: ?>
@@ -149,15 +189,15 @@ try {
             <div>
               <p class="eyebrow">Menu</p>
               <h2 class="section-title">Signature dishes and cafe favorites</h2>
+              <p class="section-copy">A curated preview of popular dishes is shown here. Use the full menu page to browse everything and place your order.</p>
             </div>
-            <p class="section-copy">A modern card-based layout with larger visuals, clearer prices, and better scanability on mobile.</p>
           </div>
 
           <div class="menu-list">
-            <?php if (empty($frontend_menu)): ?>
+            <?php if (empty($homepage_menu)): ?>
               <div class="card muted">No menu items are available right now.</div>
             <?php else: ?>
-              <?php foreach ($frontend_menu as $item): ?>
+              <?php foreach ($homepage_menu as $item): ?>
                 <?php $img = app_url($item['img'] ?? ''); ?>
                 <article
                   class="menu-item"
@@ -184,6 +224,12 @@ try {
               <?php endforeach; ?>
             <?php endif; ?>
           </div>
+
+          <?php if (!empty($frontend_menu)): ?>
+            <div class="section-footer-action">
+              <a class="hero-btn secondary section-link" href="<?php echo htmlspecialchars(app_url('menu.php'), ENT_QUOTES); ?>">See More Items</a>
+            </div>
+          <?php endif; ?>
         </section>
 
         <section id="gallery">
@@ -226,15 +272,16 @@ try {
 
         <div class="card" id="book">
           <h3>Reserve a Table</h3>
-          <form id="bookingForm" method="post" action="includes/save_booking.php" novalidate>
+          <form id="bookingForm" method="post" action="includes/save_booking.php" novalidate data-validate-form>
+            <?php echo csrf_input(); ?>
             <div class="field-group">
               <label for="bookName">Name</label>
-              <input id="bookName" name="name" data-rule="name" placeholder="Your name" required>
+              <input id="bookName" name="name" data-rule="name" placeholder="Your name" autocomplete="name" required>
             </div>
 
             <div class="field-group">
               <label for="bookPhone">Phone</label>
-              <input id="bookPhone" name="phone" data-rule="phone" inputmode="numeric" maxlength="10" placeholder="10-digit mobile number" required>
+              <input id="bookPhone" name="phone" type="tel" data-rule="phone" autocomplete="tel" inputmode="numeric" maxlength="13" placeholder="+91 9876543210" required>
             </div>
 
             <div class="field-group">
@@ -261,12 +308,12 @@ try {
 
           <div class="field-group">
             <label for="custName">Customer Name</label>
-            <input id="custName" data-rule="name" placeholder="Your name" required>
+            <input id="custName" type="text" data-rule="name" autocomplete="name" placeholder="Your name" required>
           </div>
 
           <div class="field-group">
             <label for="custPhone">Mobile Number</label>
-            <input id="custPhone" data-rule="phone" inputmode="numeric" maxlength="10" placeholder="10-digit mobile number" required>
+            <input id="custPhone" type="tel" data-rule="phone" autocomplete="tel" inputmode="numeric" maxlength="13" placeholder="+91 9876543210" required>
           </div>
 
           <div class="field-group">
@@ -314,6 +361,8 @@ try {
     <img id="modalImg" alt="">
   </div>
 
-  <script src="Script/script.js"></script>
+  <script src="Script/theme.js?v=<?php echo (int) (@filemtime(__DIR__ . '/Script/theme.js') ?: time()); ?>"></script>
+  <script src="Script/form-validation.js?v=<?php echo (int) (@filemtime(__DIR__ . '/Script/form-validation.js') ?: time()); ?>"></script>
+  <script src="Script/script.js?v=<?php echo (int) $scriptVersion; ?>"></script>
 </body>
 </html>

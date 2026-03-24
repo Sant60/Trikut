@@ -2,30 +2,39 @@
 require __DIR__ . '/db.php';
 require __DIR__ . '/app.php';
 require __DIR__ . '/invoice.php';
+require __DIR__ . '/security.php';
+require __DIR__ . '/tenant.php';
 
-$name = trim($_POST['name'] ?? '');
-$phone = trim($_POST['phone'] ?? '');
-$date = trim($_POST['date'] ?? '');
+$name = normalize_text($_POST['name'] ?? '', 100);
+$phone = trim((string) ($_POST['phone'] ?? ''));
+$date = trim((string) ($_POST['date'] ?? ''));
 $size = (int) ($_POST['size'] ?? 0);
 $redirectBase = app_url('index.php');
+$adminId = resolve_public_admin_id($pdo);
 
 $errors = [];
 
-if ($name === '' || !preg_match('/^[\p{L} ]{2,}$/u', $name)) {
+if (!verify_csrf_request()) {
+    $errors[] = 'Invalid request token';
+}
+
+if ($name === '' || !is_valid_person_name($name)) {
     $errors[] = 'Invalid name';
 }
 
-if (!preg_match('/^[6-9]\d{9}$/', $phone)) {
+if (!is_valid_indian_phone($phone)) {
     $errors[] = 'Invalid Indian mobile number';
 }
+
+$normalizedPhone = normalize_indian_phone($phone);
 
 $timestamp = strtotime($date);
 if ($timestamp === false || $timestamp < time() - 60) {
     $errors[] = 'Invalid date';
 }
 
-if ($size < 1) {
-    $size = 1;
+if ($size < 1 || $size > 50) {
+    $errors[] = 'Invalid guest count';
 }
 
 if (!empty($errors)) {
@@ -34,8 +43,8 @@ if (!empty($errors)) {
 }
 
 try {
-    $stmt = $pdo->prepare('INSERT INTO bookings (name, phone, date, size, created_at) VALUES (?, ?, ?, ?, NOW())');
-    $stmt->execute([$name, $phone, date('Y-m-d H:i:s', $timestamp), $size]);
+    $stmt = $pdo->prepare('INSERT INTO bookings (admin_id, name, phone, date, size, created_at) VALUES (?, ?, ?, ?, ?, NOW())');
+    $stmt->execute([$adminId, $name, $normalizedPhone, date('Y-m-d H:i:s', $timestamp), $size]);
     $bookingId = (int) $pdo->lastInsertId();
 } catch (Throwable $e) {
     error_log('Booking insert failed: ' . $e->getMessage());
@@ -54,7 +63,7 @@ generate_booking_invoice_pdf([
     'booking_id' => $bookingId,
     'created_at' => date('Y-m-d H:i:s'),
     'name' => $name,
-    'phone' => $phone,
+    'phone' => $normalizedPhone,
     'date' => date('Y-m-d H:i:s', $timestamp),
     'size' => $size,
 ], $invoicePath);

@@ -2,18 +2,28 @@
 require_once __DIR__ . '/../includes/auth.php';
 require_once __DIR__ . '/../includes/db.php';
 require_once __DIR__ . '/../includes/app.php';
+require_once __DIR__ . '/../includes/security.php';
+require_once __DIR__ . '/../includes/tenant.php';
+
+ensure_multi_admin_schema($pdo);
+$currentAdminId = (int) $_SESSION['admin'];
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
     $id = (int) ($_POST['id'] ?? 0);
 
+    if (!verify_csrf_request()) {
+        http_response_code(419);
+        exit('Invalid request token.');
+    }
+
     if ($id > 0 && in_array($action, ['complete', 'delete'], true)) {
         if ($action === 'complete') {
-            $stmt = $pdo->prepare("UPDATE orders SET status = 'completed' WHERE id = ? LIMIT 1");
-            $stmt->execute([$id]);
+            $stmt = $pdo->prepare("UPDATE orders SET status = 'completed' WHERE id = ? AND admin_id = ? LIMIT 1");
+            $stmt->execute([$id, $currentAdminId]);
         } else {
-            $stmt = $pdo->prepare('DELETE FROM orders WHERE id = ? LIMIT 1');
-            $stmt->execute([$id]);
+            $stmt = $pdo->prepare('DELETE FROM orders WHERE id = ? AND admin_id = ? LIMIT 1');
+            $stmt->execute([$id, $currentAdminId]);
         }
     }
 
@@ -21,8 +31,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     exit;
 }
 
-$stmt = $pdo->prepare('SELECT id, name, phone, total, items, status, created_at FROM orders ORDER BY id DESC');
-$stmt->execute();
+$stmt = $pdo->prepare('SELECT id, name, phone, total, items, status, created_at FROM orders WHERE admin_id = ? ORDER BY id DESC');
+$stmt->execute([$currentAdminId]);
 $orders = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 function decode_order_items(?string $raw): array
@@ -56,7 +66,18 @@ function decode_order_items(?string $raw): array
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Admin - Orders</title>
-  <link rel="stylesheet" href="../CSS/style.css">
+  <script>
+    (function () {
+      try {
+        var savedTheme = localStorage.getItem("admin-theme");
+        if (savedTheme === "dark" || savedTheme === "light") {
+          document.documentElement.setAttribute("data-theme", savedTheme);
+        }
+      } catch (e) {}
+    })();
+  </script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/7.0.1/css/all.min.css">
+  <link rel="stylesheet" href="../CSS/style.css?v=<?php echo (int) (@filemtime(__DIR__ . '/../CSS/style.css') ?: time()); ?>">
 </head>
 <body class="admin-body">
   <div class="admin-page">
@@ -66,6 +87,10 @@ function decode_order_items(?string $raw): array
         <h1 class="admin-title">Orders</h1>
         <div class="admin-subtitle">Review new customer orders, delivery preference, item lines, and current status.</div>
       </div>
+      <button class="theme-toggle admin-theme-toggle" type="button" data-theme-toggle data-theme-storage="admin-theme" aria-pressed="false" aria-label="Switch to dark mode" title="Toggle admin light and dark mode">
+        <i class="fa-solid fa-toggle-off" aria-hidden="true"></i>
+        <i class="fa-solid fa-toggle-on" aria-hidden="true"></i>
+      </button>
     </div>
 
     <div class="admin-card">
@@ -136,12 +161,14 @@ function decode_order_items(?string $raw): array
                     <div class="admin-inline-actions">
                       <?php if (($order['status'] ?? '') !== 'completed'): ?>
                         <form method="post">
+                          <?php echo csrf_input(); ?>
                           <input type="hidden" name="id" value="<?php echo (int) $order['id']; ?>">
                           <input type="hidden" name="action" value="complete">
                           <button class="admin-btn-primary" type="submit">Mark Complete</button>
                         </form>
                       <?php endif; ?>
                       <form method="post" onsubmit="return confirm('Delete this order?');">
+                        <?php echo csrf_input(); ?>
                         <input type="hidden" name="id" value="<?php echo (int) $order['id']; ?>">
                         <input type="hidden" name="action" value="delete">
                         <button class="admin-btn-danger" type="submit">Delete</button>
@@ -156,5 +183,6 @@ function decode_order_items(?string $raw): array
       <?php endif; ?>
     </div>
   </div>
+  <script src="../Script/theme.js?v=<?php echo (int) (@filemtime(__DIR__ . '/../Script/theme.js') ?: time()); ?>"></script>
 </body>
 </html>

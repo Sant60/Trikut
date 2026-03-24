@@ -2,22 +2,24 @@
 require_once __DIR__ . '/../includes/auth.php';
 require_once __DIR__ . '/../includes/db.php';
 require_once __DIR__ . '/../includes/app.php';
+require_once __DIR__ . '/../includes/hero_media.php';
+require_once __DIR__ . '/../includes/admin_profile.php';
+require_once __DIR__ . '/../includes/tenant.php';
 
-$adminName = 'Admin';
-try {
-    $stmt = $pdo->prepare('SELECT username FROM admins WHERE id = ? LIMIT 1');
-    $stmt->execute([$_SESSION['admin']]);
-    $row = $stmt->fetch(PDO::FETCH_ASSOC);
-    if ($row && !empty($row['username'])) {
-        $adminName = $row['username'];
-    }
-} catch (Throwable $e) {
-}
+ensure_admin_profile_schema($pdo);
+ensure_multi_admin_schema($pdo);
+$currentAdminId = (int) $_SESSION['admin'];
+$isOwnerAdmin = is_owner_admin($pdo, $currentAdminId);
+$adminProfile = fetch_admin_profile($pdo, (int) $_SESSION['admin']) ?? [];
+$adminName = $adminProfile['display_name'] ?? ($adminProfile['username'] ?? 'Admin');
+$adminMobile = $adminProfile['mobile'] ?? '';
+$adminPhotoUrl = !empty($adminProfile['photo']) ? app_url($adminProfile['photo']) : '';
 
-function safe_count(PDO $pdo, string $table): int
+function safe_count(PDO $pdo, string $table, int $adminId): int
 {
     try {
-        $stmt = $pdo->query("SELECT COUNT(*) AS c FROM `$table`");
+        $stmt = $pdo->prepare("SELECT COUNT(*) AS c FROM `$table` WHERE admin_id = ?");
+        $stmt->execute([$adminId]);
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
         return (int) ($row['c'] ?? 0);
     } catch (Throwable $e) {
@@ -26,38 +28,50 @@ function safe_count(PDO $pdo, string $table): int
 }
 
 $counts = [
-    'orders' => safe_count($pdo, 'orders'),
-    'bookings' => safe_count($pdo, 'bookings'),
-    'menu' => safe_count($pdo, 'menu'),
-    'gallery' => safe_count($pdo, 'gallery'),
+    'orders' => safe_count($pdo, 'orders', $currentAdminId),
+    'bookings' => safe_count($pdo, 'bookings', $currentAdminId),
+    'menu' => safe_count($pdo, 'menu', $currentAdminId),
+    'gallery' => safe_count($pdo, 'gallery', $currentAdminId),
+    'hero' => 0,
 ];
 
 $recentOrders = [];
 $recentBookings = [];
 $recentMenu = [];
 $recentGallery = [];
+$currentHero = null;
 
 try {
-    $stmt = $pdo->query('SELECT id, name, phone, total, status, created_at FROM orders ORDER BY id DESC LIMIT 6');
+    $stmt = $pdo->prepare('SELECT id, name, phone, total, status, created_at FROM orders WHERE admin_id = ? ORDER BY id DESC LIMIT 6');
+    $stmt->execute([$currentAdminId]);
     $recentOrders = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Throwable $e) {
 }
 
 try {
-    $stmt = $pdo->query('SELECT id, name, phone, date, size, created_at FROM bookings ORDER BY id DESC LIMIT 6');
+    $stmt = $pdo->prepare('SELECT id, name, phone, date, size, created_at FROM bookings WHERE admin_id = ? ORDER BY id DESC LIMIT 6');
+    $stmt->execute([$currentAdminId]);
     $recentBookings = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Throwable $e) {
 }
 
 try {
-    $stmt = $pdo->query('SELECT id, name, price, img, active FROM menu ORDER BY id DESC LIMIT 6');
+    $stmt = $pdo->prepare('SELECT id, name, price, img, active FROM menu WHERE admin_id = ? ORDER BY id DESC LIMIT 6');
+    $stmt->execute([$currentAdminId]);
     $recentMenu = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Throwable $e) {
 }
 
 try {
-    $stmt = $pdo->query('SELECT id, img, caption, created_at FROM gallery ORDER BY id DESC LIMIT 6');
+    $stmt = $pdo->prepare('SELECT id, img, caption, created_at FROM gallery WHERE admin_id = ? ORDER BY id DESC LIMIT 6');
+    $stmt->execute([$currentAdminId]);
     $recentGallery = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Throwable $e) {
+}
+
+try {
+    $currentHero = fetch_current_hero_media($pdo, $currentAdminId);
+    $counts['hero'] = $currentHero ? 1 : 0;
 } catch (Throwable $e) {
 }
 
@@ -70,19 +84,48 @@ $latestBookingId = isset($recentBookings[0]['id']) ? (int) $recentBookings[0]['i
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Admin - Dashboard - Trikut Restaurant</title>
-  <link rel="stylesheet" href="../CSS/style.css">
+  <script>
+    (function () {
+      try {
+        var savedTheme = localStorage.getItem("admin-theme");
+        if (savedTheme === "dark" || savedTheme === "light") {
+          document.documentElement.setAttribute("data-theme", savedTheme);
+        }
+      } catch (e) {}
+    })();
+  </script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/7.0.1/css/all.min.css">
+  <link rel="stylesheet" href="../CSS/style.css?v=<?php echo (int) (@filemtime(__DIR__ . '/../CSS/style.css') ?: time()); ?>">
 </head>
 <body class="admin-body">
   <div class="admin-shell">
     <aside class="admin-sidebar" aria-label="Admin menu">
       <div class="admin-brand">Trikut - Admin</div>
-      <div class="admin-greeting">Hello, <?php echo htmlspecialchars($adminName, ENT_QUOTES); ?></div>
+      <button class="theme-toggle admin-theme-toggle" type="button" data-theme-toggle data-theme-storage="admin-theme" aria-pressed="false" aria-label="Switch to dark mode" title="Toggle admin light and dark mode">
+        <i class="fa-solid fa-toggle-off" aria-hidden="true"></i>
+        <i class="fa-solid fa-toggle-on" aria-hidden="true"></i>
+      </button>
+      <a class="admin-profile-card" href="profile.php">
+        <?php if ($adminPhotoUrl !== ''): ?>
+          <img class="admin-profile-photo" src="<?php echo htmlspecialchars($adminPhotoUrl, ENT_QUOTES); ?>" alt="<?php echo htmlspecialchars($adminName, ENT_QUOTES); ?>">
+        <?php else: ?>
+          <div class="admin-profile-fallback"><?php echo htmlspecialchars(strtoupper(substr((string) $adminName, 0, 1)), ENT_QUOTES); ?></div>
+        <?php endif; ?>
+        <div class="admin-profile-copy">
+          <strong><?php echo htmlspecialchars($adminName, ENT_QUOTES); ?></strong>
+          <span class="admin-muted"><?php echo htmlspecialchars($adminMobile ?: 'No mobile set', ENT_QUOTES); ?></span>
+        </div>
+      </a>
       <nav class="admin-nav">
         <a class="is-active" href="dashboard.php">Dashboard</a>
         <a href="menu.php">Menu</a>
+        <a href="hero.php">Hero Image</a>
         <a href="gallery.php">Gallery</a>
         <a href="orders.php">Orders</a>
         <a href="bookings.php">Bookings</a>
+        <?php if ($isOwnerAdmin): ?>
+          <a href="register.php">Add Admin</a>
+        <?php endif; ?>
         <a href="logout.php">Logout</a>
       </nav>
       <div class="admin-meta" style="margin-top:auto">Server Time: <?php echo date('Y-m-d H:i'); ?></div>
@@ -97,8 +140,13 @@ $latestBookingId = isset($recentBookings[0]['id']) ? (int) $recentBookings[0]['i
         <div class="admin-header-actions">
           <a class="admin-btn-primary" href="orders.php">View Orders</a>
           <a class="admin-btn-secondary" href="menu.php">Manage Menu</a>
+          <a class="admin-btn-secondary" href="hero.php">Manage Hero</a>
           <a class="admin-btn-secondary" href="gallery.php">Manage Gallery</a>
-          <button class="admin-btn-alert" id="enableNotificationsBtn" type="button">Enable Alerts</button>
+          <a class="admin-btn-secondary" href="profile.php">Manage Profile</a>
+          <?php if ($isOwnerAdmin): ?>
+            <a class="admin-btn-secondary" href="register.php">Add Admin</a>
+          <?php endif; ?>
+          <button class="admin-btn-alert" id="enableNotificationsBtn" type="button" aria-pressed="false">Alerts Off</button>
         </div>
       </div>
 
@@ -122,10 +170,30 @@ $latestBookingId = isset($recentBookings[0]['id']) ? (int) $recentBookings[0]['i
             <div class="admin-muted">Active dish entries</div>
           </div>
           <div class="admin-card">
+            <div class="admin-muted">Hero Image</div>
+            <div class="admin-stat-number"><?php echo $counts['hero']; ?></div>
+            <div class="admin-muted">Homepage banner image</div>
+          </div>
+          <div class="admin-card">
             <div class="admin-muted">Gallery Photos</div>
             <div class="admin-stat-number"><?php echo $counts['gallery']; ?></div>
             <div class="admin-muted">Uploaded image count</div>
           </div>
+        </section>
+
+        <section class="admin-card">
+          <h3 style="margin:0 0 12px">Current Hero Image</h3>
+          <?php if (!$currentHero): ?>
+            <div class="admin-empty">No dedicated hero image set.</div>
+          <?php else: ?>
+            <div class="admin-preview">
+              <img src="<?php echo htmlspecialchars(app_url($currentHero['img']), ENT_QUOTES); ?>" alt="<?php echo htmlspecialchars($currentHero['caption'] ?: 'Hero image', ENT_QUOTES); ?>">
+            </div>
+            <div style="margin-top:10px"><?php echo htmlspecialchars($currentHero['caption'] ?? '', ENT_QUOTES); ?></div>
+            <div class="admin-form-actions" style="margin-top:12px">
+              <a class="admin-btn-secondary" href="hero.php">Update Hero Image</a>
+            </div>
+          <?php endif; ?>
         </section>
 
         <section class="admin-card">
@@ -258,12 +326,15 @@ $latestBookingId = isset($recentBookings[0]['id']) ? (int) $recentBookings[0]['i
     </div>
   </div>
 
+  <script src="../Script/theme.js?v=<?php echo (int) (@filemtime(__DIR__ . '/../Script/theme.js') ?: time()); ?>"></script>
   <script>
     (function () {
       let latestOrderId = <?php echo $latestOrderId; ?>;
       let latestBookingId = <?php echo $latestBookingId; ?>;
       const notifyBtn = document.getElementById("enableNotificationsBtn");
       const notifyStatus = document.getElementById("notifyStatus");
+      const alertStorageKey = "admin-alerts-enabled";
+      let alertsEnabled = false;
 
       function updateStatus(text) {
         if (notifyStatus) {
@@ -271,18 +342,47 @@ $latestBookingId = isset($recentBookings[0]['id']) ? (int) $recentBookings[0]['i
         }
       }
 
-      async function requestPermission() {
+      function syncAlertUi() {
+        if (!notifyBtn) return;
+        notifyBtn.textContent = alertsEnabled ? "Alerts On" : "Alerts Off";
+        notifyBtn.setAttribute("aria-pressed", String(alertsEnabled));
+      }
+
+      function setAlertsEnabled(nextState) {
+        alertsEnabled = Boolean(nextState);
+        try {
+          localStorage.setItem(alertStorageKey, alertsEnabled ? "true" : "false");
+        } catch (error) {
+        }
+        syncAlertUi();
+      }
+
+      async function toggleAlerts() {
         if (!("Notification" in window)) {
+          setAlertsEnabled(false);
           updateStatus("This browser does not support notifications.");
           return;
         }
 
-        const permission = await Notification.requestPermission();
-        if (permission === "granted") {
-          updateStatus("Notifications enabled. New orders and reservations will alert the owner here.");
-        } else {
-          updateStatus("Notifications were not allowed. New orders will still be stored in the admin panel.");
+        if (alertsEnabled) {
+          setAlertsEnabled(false);
+          updateStatus("Alerts turned off for this browser. Orders and bookings will still be stored in the admin panel.");
+          return;
         }
+
+        let permission = Notification.permission;
+        if (permission !== "granted") {
+          permission = await Notification.requestPermission();
+        }
+
+        if (permission === "granted") {
+          setAlertsEnabled(true);
+          updateStatus("Alerts turned on. New orders and reservations will notify you here.");
+          return;
+        }
+
+        setAlertsEnabled(false);
+        updateStatus("Browser notification permission was not allowed. Alerts remain off.");
       }
 
       async function pollNotifications() {
@@ -296,7 +396,7 @@ $latestBookingId = isset($recentBookings[0]['id']) ? (int) $recentBookings[0]['i
 
           if (data.latest_order && Number(data.latest_order.id) > latestOrderId) {
             latestOrderId = Number(data.latest_order.id);
-            if ("Notification" in window && Notification.permission === "granted") {
+            if (alertsEnabled && "Notification" in window && Notification.permission === "granted") {
               new Notification("New Food Order", {
                 body: `${data.latest_order.name} placed order #${data.latest_order.id}.`
               });
@@ -306,7 +406,7 @@ $latestBookingId = isset($recentBookings[0]['id']) ? (int) $recentBookings[0]['i
 
           if (data.latest_booking && Number(data.latest_booking.id) > latestBookingId) {
             latestBookingId = Number(data.latest_booking.id);
-            if ("Notification" in window && Notification.permission === "granted") {
+            if (alertsEnabled && "Notification" in window && Notification.permission === "granted") {
               new Notification("New Table Reservation", {
                 body: `${data.latest_booking.name} reserved table #${data.latest_booking.id}.`
               });
@@ -318,13 +418,28 @@ $latestBookingId = isset($recentBookings[0]['id']) ? (int) $recentBookings[0]['i
       }
 
       if (notifyBtn) {
-        notifyBtn.addEventListener("click", requestPermission);
+        notifyBtn.addEventListener("click", toggleAlerts);
       }
 
-      if ("Notification" in window && Notification.permission === "granted") {
-        updateStatus("Notifications enabled. New orders and reservations will alert the owner here.");
+      try {
+        alertsEnabled = localStorage.getItem(alertStorageKey) === "true";
+      } catch (error) {
+        alertsEnabled = false;
       }
 
+      if (!("Notification" in window)) {
+        alertsEnabled = false;
+        updateStatus("This browser does not support notifications.");
+      } else if (alertsEnabled && Notification.permission === "granted") {
+        updateStatus("Alerts are on. New orders and reservations will notify you here.");
+      } else if (alertsEnabled && Notification.permission !== "granted") {
+        alertsEnabled = false;
+        updateStatus("Alerts are off until browser notification permission is granted again.");
+      } else {
+        updateStatus("Alerts are off. Turn them on when you want browser notifications.");
+      }
+
+      syncAlertUi();
       setInterval(pollNotifications, 15000);
     })();
   </script>

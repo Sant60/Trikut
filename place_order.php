@@ -1,8 +1,12 @@
 <?php
 require __DIR__ . '/includes/db.php';
 require __DIR__ . '/includes/invoice.php';
+require __DIR__ . '/includes/security.php';
+require __DIR__ . '/includes/tenant.php';
 
 header('Content-Type: application/json; charset=utf-8');
+
+$adminId = resolve_public_admin_id($pdo);
 
 $raw = file_get_contents('php://input');
 if (!$raw) {
@@ -18,22 +22,31 @@ if (!is_array($data)) {
     exit;
 }
 
-$name = trim($data['name'] ?? '');
+$csrfToken = (string) ($_SERVER['HTTP_X_CSRF_TOKEN'] ?? '');
+if (!verify_csrf_request($csrfToken)) {
+    http_response_code(419);
+    echo json_encode(['success' => false, 'message' => 'Invalid request token.']);
+    exit;
+}
+
+$name = normalize_text($data['name'] ?? '', 100);
 $phone = trim($data['phone'] ?? '');
 $deliveryType = trim((string) ($data['delivery_type'] ?? ''));
 $cart = $data['cart'] ?? [];
 
-if ($name === '' || !preg_match('/^[\p{L} ]{2,}$/u', $name)) {
+if ($name === '' || !is_valid_person_name($name)) {
     http_response_code(422);
     echo json_encode(['success' => false, 'message' => 'Invalid name.']);
     exit;
 }
 
-if (!preg_match('/^[6-9]\d{9}$/', $phone)) {
+if (!is_valid_indian_phone($phone)) {
     http_response_code(422);
     echo json_encode(['success' => false, 'message' => 'Invalid phone number.']);
     exit;
 }
+
+$normalizedPhone = normalize_indian_phone($phone);
 
 $deliveryTypeMap = [
     'dine_in' => 'Dine In',
@@ -56,12 +69,12 @@ $normalizedCart = [];
 $total = 0.0;
 
 foreach ($cart as $item) {
-    $itemName = trim((string) ($item['name'] ?? ''));
+    $itemName = normalize_text((string) ($item['name'] ?? ''), 120);
     $price = (float) ($item['price'] ?? 0);
     $qty = (int) ($item['qty'] ?? 0);
     $id = (int) ($item['id'] ?? 0);
 
-    if ($itemName === '' || $price < 0 || $qty < 1) {
+    if ($itemName === '' || $price < 0 || $price > 100000 || $qty < 1 || $qty > 99) {
         continue;
     }
 
@@ -88,10 +101,11 @@ $orderPayload = [
 ];
 
 try {
-    $stmt = $pdo->prepare('INSERT INTO orders (name, phone, total, items, created_at, status) VALUES (?, ?, ?, ?, NOW(), ?)');
+    $stmt = $pdo->prepare('INSERT INTO orders (admin_id, name, phone, total, items, created_at, status) VALUES (?, ?, ?, ?, ?, NOW(), ?)');
     $stmt->execute([
+        $adminId,
         $name,
-        $phone,
+        $normalizedPhone,
         number_format($total, 2, '.', ''),
         json_encode($orderPayload, JSON_UNESCAPED_UNICODE),
         'new',
@@ -125,7 +139,7 @@ generate_order_invoice_pdf([
     'order_id' => $orderId,
     'created_at' => $createdAt,
     'name' => $name,
-    'phone' => $phone,
+    'phone' => $normalizedPhone,
     'delivery_type' => $deliveryTypeMap[$deliveryType],
     'items' => $normalizedCart,
     'total' => $total,
