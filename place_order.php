@@ -1,67 +1,141 @@
 <?php
 require __DIR__ . '/includes/db.php';
+require __DIR__ . '/includes/invoice.php';
 
 header('Content-Type: application/json; charset=utf-8');
 
 $raw = file_get_contents('php://input');
 if (!$raw) {
-    echo json_encode(['success' => false, 'message' => 'Empty request']);
+    http_response_code(400);
+    echo json_encode(['success' => false, 'message' => 'Empty request.']);
     exit;
 }
 
 $data = json_decode($raw, true);
 if (!is_array($data)) {
-    echo json_encode(['success' => false, 'message' => 'Invalid JSON']);
+    http_response_code(400);
+    echo json_encode(['success' => false, 'message' => 'Invalid JSON payload.']);
     exit;
 }
 
 $name = trim($data['name'] ?? '');
 $phone = trim($data['phone'] ?? '');
+$deliveryType = trim((string) ($data['delivery_type'] ?? ''));
 $cart = $data['cart'] ?? [];
 
 if ($name === '' || !preg_match('/^[\p{L} ]{2,}$/u', $name)) {
-    echo json_encode(['success' => false, 'message' => 'Invalid name']);
+    http_response_code(422);
+    echo json_encode(['success' => false, 'message' => 'Invalid name.']);
     exit;
 }
+
 if (!preg_match('/^[6-9]\d{9}$/', $phone)) {
-    echo json_encode(['success' => false, 'message' => 'Invalid phone']);
+    http_response_code(422);
+    echo json_encode(['success' => false, 'message' => 'Invalid phone number.']);
     exit;
 }
+
+$deliveryTypeMap = [
+    'dine_in' => 'Dine In',
+    'home_delivery' => 'Home Delivery',
+];
+
+if (!isset($deliveryTypeMap[$deliveryType])) {
+    http_response_code(422);
+    echo json_encode(['success' => false, 'message' => 'Please select a valid delivery type.']);
+    exit;
+}
+
 if (!is_array($cart) || count($cart) === 0) {
-    echo json_encode(['success' => false, 'message' => 'Cart empty']);
+    http_response_code(422);
+    echo json_encode(['success' => false, 'message' => 'Cart is empty.']);
     exit;
 }
 
-// compute total from submitted cart (trust but sanitize)
-$total = 0;
-$items_summary = [];
-foreach ($cart as $c) {
-    $price = floatval($c['price'] ?? 0);
-    $qty = intval($c['qty'] ?? 0);
-    if ($qty <= 0) $qty = 1;
-    $total += $price * $qty;
-    $items_summary[] = ($c['name'] ?? 'Item') . " x{$qty}";
+$normalizedCart = [];
+$total = 0.0;
+
+foreach ($cart as $item) {
+    $itemName = trim((string) ($item['name'] ?? ''));
+    $price = (float) ($item['price'] ?? 0);
+    $qty = (int) ($item['qty'] ?? 0);
+    $id = (int) ($item['id'] ?? 0);
+
+    if ($itemName === '' || $price < 0 || $qty < 1) {
+        continue;
+    }
+
+    $normalizedCart[] = [
+        'id' => $id,
+        'name' => $itemName,
+        'price' => round($price, 2),
+        'qty' => $qty,
+    ];
+
+    $lineTotal = round($price, 2) * $qty;
+    $total += $lineTotal;
 }
 
-$items_json = json_encode($cart, JSON_UNESCAPED_UNICODE);
+if (empty($normalizedCart)) {
+    http_response_code(422);
+    echo json_encode(['success' => false, 'message' => 'Cart items are invalid.']);
+    exit;
+}
+
+$orderPayload = [
+    'delivery_type' => $deliveryTypeMap[$deliveryType],
+    'items' => $normalizedCart,
+];
 
 try {
-    $stmt = $pdo->prepare("INSERT INTO orders (name, phone, total, items, created_at, status) VALUES (?,?,?,?,NOW(),?)");
-    $stmt->execute([$name, $phone, $total, $items_json, 'new']);
-    $orderId = $pdo->lastInsertId();
+    $stmt = $pdo->prepare('INSERT INTO orders (name, phone, total, items, created_at, status) VALUES (?, ?, ?, ?, NOW(), ?)');
+    $stmt->execute([
+        $name,
+        $phone,
+        number_format($total, 2, '.', ''),
+        json_encode($orderPayload, JSON_UNESCAPED_UNICODE),
+        'new',
+    ]);
+    $orderId = (int) $pdo->lastInsertId();
 } catch (Throwable $e) {
     error_log('Order insert failed: ' . $e->getMessage());
-    echo json_encode(['success' => false, 'message' => 'DB error']);
+    http_response_code(500);
+    echo json_encode(['success' => false, 'message' => 'Could not save the order.']);
     exit;
 }
 
-$msg  = "New Order (#{$orderId})%0A";
-$msg .= "Name: " . rawurlencode($name) . "%0A";
-$msg .= "Phone: " . rawurlencode($phone) . "%0A";
-$msg .= "Items: " . rawurlencode(implode(', ', $items_summary)) . "%0A";
-$msg .= "Total: ₹" . rawurlencode(number_format($total,2));
+$invoiceDir = __DIR__ . '/assets/invoices';
+if (!is_dir($invoiceDir)) {
+    @mkdir($invoiceDir, 0777, true);
+}
 
-$whatsapp = "https://wa.me/91YOUR_NUMBER?text={$msg}"; // replace YOUR_NUMBER
+$createdAt = date('Y-m-d H:i:s');
+try {
+    $stmt = $pdo->prepare('SELECT created_at FROM orders WHERE id = ? LIMIT 1');
+    $stmt->execute([$orderId]);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($row && !empty($row['created_at'])) {
+        $createdAt = (string) $row['created_at'];
+    }
+} catch (Throwable $e) {
+}
 
-echo json_encode(['success' => true, 'order_id' => $orderId, 'whatsapp' => $whatsapp]);
-exit;
+$invoicePath = $invoiceDir . '/order_' . $orderId . '.pdf';
+generate_order_invoice_pdf([
+    'order_id' => $orderId,
+    'created_at' => $createdAt,
+    'name' => $name,
+    'phone' => $phone,
+    'delivery_type' => $deliveryTypeMap[$deliveryType],
+    'items' => $normalizedCart,
+    'total' => $total,
+], $invoicePath);
+
+$payload = [
+    'success' => true,
+    'order_id' => $orderId,
+    'invoice_url' => 'assets/invoices/order_' . $orderId . '.pdf',
+    'message' => 'Order placed successfully. The restaurant team can now view it in the admin panel.',
+];
+
+echo json_encode($payload, JSON_UNESCAPED_UNICODE);

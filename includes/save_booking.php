@@ -1,46 +1,63 @@
 <?php
 require __DIR__ . '/db.php';
+require __DIR__ . '/app.php';
+require __DIR__ . '/invoice.php';
 
-$name  = trim($_POST['name'] ?? '');
+$name = trim($_POST['name'] ?? '');
 $phone = trim($_POST['phone'] ?? '');
-$date  = trim($_POST['date'] ?? '');
-$size  = intval($_POST['size'] ?? 0);
+$date = trim($_POST['date'] ?? '');
+$size = (int) ($_POST['size'] ?? 0);
+$redirectBase = app_url('index.php');
 
-// server-side validation (basic)
 $errors = [];
-if ($name === '' || mb_strlen(preg_replace('/\s+/', '', $name)) < 2 || !preg_match('/^[\p{L} ]+$/u', $name)) {
+
+if ($name === '' || !preg_match('/^[\p{L} ]{2,}$/u', $name)) {
     $errors[] = 'Invalid name';
 }
+
 if (!preg_match('/^[6-9]\d{9}$/', $phone)) {
     $errors[] = 'Invalid Indian mobile number';
 }
-$dt = strtotime($date);
-if ($dt === false) {
+
+$timestamp = strtotime($date);
+if ($timestamp === false || $timestamp < time() - 60) {
     $errors[] = 'Invalid date';
 }
-if ($size < 1) $size = 1;
+
+if ($size < 1) {
+    $size = 1;
+}
 
 if (!empty($errors)) {
-    // simple fallback: redirect back to homepage with error flag (UI can show message)
-    header('Location: /index.php?booking_err=1');
+    header('Location: ' . $redirectBase . '?booking_err=1');
     exit;
 }
 
 try {
-    $stmt = $pdo->prepare("INSERT INTO bookings (name, phone, date, size, created_at) VALUES (?,?,?,?,NOW())");
-    $stmt->execute([$name, $phone, date('Y-m-d H:i:s', $dt), $size]);
+    $stmt = $pdo->prepare('INSERT INTO bookings (name, phone, date, size, created_at) VALUES (?, ?, ?, ?, NOW())');
+    $stmt->execute([$name, $phone, date('Y-m-d H:i:s', $timestamp), $size]);
+    $bookingId = (int) $pdo->lastInsertId();
 } catch (Throwable $e) {
     error_log('Booking insert failed: ' . $e->getMessage());
-    header('Location: /index.php?booking_err=1');
+    header('Location: ' . $redirectBase . '?booking_err=1');
     exit;
 }
 
-$msg  = "New Table Booking%0A";
-$msg .= "Name: " . rawurlencode($name) . "%0A";
-$msg .= "Phone: " . rawurlencode($phone) . "%0A";
-$msg .= "Date: " . rawurlencode(date('Y-m-d H:i', $dt)) . "%0A";
-$msg .= "Guests: " . rawurlencode((string)$size);
+$invoiceDir = dirname(__DIR__) . '/assets/invoices';
+if (!is_dir($invoiceDir)) {
+    @mkdir($invoiceDir, 0777, true);
+}
 
-$wa = "https://wa.me/91YOUR_NUMBER?text={$msg}"; // replace YOUR_NUMBER
-header("Location: $wa");
+$invoiceRelative = 'assets/invoices/booking_' . $bookingId . '.pdf';
+$invoicePath = dirname(__DIR__) . '/assets/invoices/booking_' . $bookingId . '.pdf';
+generate_booking_invoice_pdf([
+    'booking_id' => $bookingId,
+    'created_at' => date('Y-m-d H:i:s'),
+    'name' => $name,
+    'phone' => $phone,
+    'date' => date('Y-m-d H:i:s', $timestamp),
+    'size' => $size,
+], $invoicePath);
+
+header('Location: ' . $redirectBase . '?booking=success&booking_invoice=' . rawurlencode($invoiceRelative));
 exit;

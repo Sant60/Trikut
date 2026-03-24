@@ -1,356 +1,349 @@
-// ...existing code... (cleaned and fixed)
 document.addEventListener("DOMContentLoaded", () => {
-  /* ===== GALLERY CAROUSEL + MODAL ===== */
-  const galTrack = document.querySelector(".g-track");
-  const galImages = Array.from(document.querySelectorAll(".g-track img"));
-  const galPrevBtn = document.querySelector(".g-nav.prev");
-  const galNextBtn = document.querySelector(".g-nav.next");
-  let galIndex = 0;
-  let galInterval;
+  const cart = [];
+  const cartItemsEl = document.getElementById("cartItems");
+  const cartTotalEl = document.getElementById("cartTotal");
+  const orderBtn = document.getElementById("orderNowBtn");
+  const modal = document.getElementById("imgModal");
+  const modalImg = document.getElementById("modalImg");
+  const modalClose = document.querySelector(".modal-close");
 
-  function galUpdate() {
-    if (galTrack) galTrack.style.transform = `translateX(-${galIndex * 100}%)`;
+  const bookingForm = document.getElementById("bookingForm");
+  const bookingDate = document.getElementById("bookDate");
+  const customerName = document.getElementById("custName");
+  const customerPhone = document.getElementById("custPhone");
+  const deliveryType = document.getElementById("deliveryType");
+  const navToggle = document.querySelector(".nav-toggle");
+  const mainNav = document.getElementById("primaryNav");
+  const navBackdrop = document.querySelector(".nav-backdrop");
+  const mobileNavQuery = window.matchMedia("(max-width: 1024px)");
+  const bookingInvoiceUrl = document.body.dataset.bookingInvoice || "";
+
+  function setNavOpen(isOpen) {
+    if (!navToggle || !mainNav) return;
+    navToggle.setAttribute("aria-expanded", String(isOpen));
+    mainNav.classList.toggle("is-open", isOpen);
+    document.body.classList.toggle("nav-open", isOpen && mobileNavQuery.matches);
   }
 
-  if (galPrevBtn && galNextBtn && galImages.length) {
-    galPrevBtn.addEventListener("click", () => {
-      galIndex = galIndex > 0 ? galIndex - 1 : galImages.length - 1;
-      galUpdate();
-      resetGalAuto();
-    });
-    galNextBtn.addEventListener("click", () => {
-      galIndex = (galIndex + 1) % galImages.length;
-      galUpdate();
-      resetGalAuto();
-    });
+  function syncNavState(forceClosed = false) {
+    if (!navToggle || !mainNav) return;
 
-    function startGalAuto() {
-      galInterval = setInterval(() => {
-        galIndex = (galIndex + 1) % galImages.length;
-        galUpdate();
-      }, 3000);
-    }
-    function resetGalAuto() {
-      clearInterval(galInterval);
-      startGalAuto();
-    }
-    startGalAuto();
-  }
-
-  // Modal
-  const galModal = document.getElementById("imgModal");
-  const galModalImg = document.getElementById("modalImg");
-  const galModalClose = document.querySelector(".modal-close");
-  const galModalPrev = document.querySelector(".modal-prev");
-  const galModalNext = document.querySelector(".modal-next");
-
-  galImages.forEach((img, i) => {
-    img.addEventListener("click", () => {
-      galIndex = i;
-      if (galModal && galModalImg) {
-        galModal.style.display = "flex";
-        galModalImg.src = img.src;
-      }
-    });
-  });
-
-  function updateModalImg() {
-    if (galModalImg && galImages[galIndex])
-      galModalImg.src = galImages[galIndex].src;
-  }
-
-  if (galModalPrev)
-    galModalPrev.addEventListener("click", () => {
-      galIndex = galIndex > 0 ? galIndex - 1 : galImages.length - 1;
-      updateModalImg();
-    });
-  if (galModalNext)
-    galModalNext.addEventListener("click", () => {
-      galIndex = (galIndex + 1) % galImages.length;
-      updateModalImg();
-    });
-  if (galModalClose)
-    galModalClose.addEventListener("click", () => {
-      if (galModal) galModal.style.display = "none";
-    });
-  if (galModal)
-    galModal.addEventListener("click", (e) => {
-      if (e.target === galModal) galModal.style.display = "none";
-    });
-
-  /* ===== MENU MARQUEE ===== */
-  const menuBox = document.getElementById("menuMarquee");
-  const menuTrack = document.querySelector(".mm-track");
-  const menuBtnLeft = document.querySelector(".mm-btn.left");
-  const menuBtnRight = document.querySelector(".mm-btn.right");
-
-  if (menuTrack && menuBox) {
-    // duplicate children to enable seamless loop
-    const items = Array.from(menuTrack.children);
-    items.forEach((it) => menuTrack.appendChild(it.cloneNode(true)));
-
-    let menuSpeed = 0.6;
-    let menuPos = 0;
-    let menuPaused = false;
-
-    function menuStep() {
-      if (!menuPaused) {
-        menuPos -= menuSpeed;
-        if (Math.abs(menuPos) >= menuTrack.scrollWidth / 2) menuPos = 0;
-        menuTrack.style.transform = `translateX(${menuPos}px)`;
-      }
-      requestAnimationFrame(menuStep);
-    }
-    menuStep();
-
-    menuBox.addEventListener("mouseenter", () => (menuPaused = true));
-    menuBox.addEventListener("mouseleave", () => (menuPaused = false));
-
-    if (menuBtnRight)
-      menuBtnRight.addEventListener("click", () => {
-        menuSpeed = Math.min(3, menuSpeed + 0.2);
-      });
-    if (menuBtnLeft)
-      menuBtnLeft.addEventListener("click", () => {
-        menuSpeed = Math.max(0.2, menuSpeed - 0.2);
-      });
-  }
-
-  /* ===== CART MODULE ===== */
-  let cart = [];
-
-  function renderCart() {
-    const itemsBox = document.getElementById("cartItems");
-    const totalBox = document.getElementById("cartTotal");
-    if (!itemsBox || !totalBox) return;
-
-    if (cart.length === 0) {
-      itemsBox.innerHTML = "<p class='muted'>No items added</p>";
-      totalBox.innerText = "₹0";
+    if (!mobileNavQuery.matches) {
+      setNavOpen(false);
       return;
     }
 
-    let grandTotal = 0;
-    itemsBox.innerHTML = cart
-      .map((item, idx) => {
-        const lineTotal = item.price * item.qty;
-        grandTotal += lineTotal;
-        return `
-        <div class="cart-row">
-          <div>
-            <strong>${item.name}</strong><br>
-            <small>₹${item.price} × ${item.qty} = ₹${lineTotal}</small>
-          </div>
-          <div class="cart-actions">
-            <button class="qty-btn" onclick="changeQty(${idx}, -1)">−</button>
-            <strong>${item.qty}</strong>
-            <button class="qty-btn" onclick="changeQty(${idx}, 1)">+</button>
-            <button class="remove-btn" onclick="removeItem(${idx})">×</button>
-          </div>
-        </div>
-      `;
-      })
-      .join("");
-    totalBox.innerText = "₹" + grandTotal;
+    if (forceClosed) {
+      setNavOpen(false);
+    }
   }
 
-  // exposed for inline onclick handlers
-  window.changeQty = (index, delta) => {
-    if (!cart[index]) return;
-    cart[index].qty += delta;
-    if (cart[index].qty <= 0) cart.splice(index, 1);
-    renderCart();
-  };
-
-  window.removeItem = (index) => {
-    cart.splice(index, 1);
-    renderCart();
-  };
-
-  // add from menu buttons
-  document.querySelectorAll(".add-to-cart").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const item = {
-        id: btn.dataset.id,
-        name: btn.dataset.name,
-        price: Number(btn.dataset.price || 0),
-        img: btn.dataset.img,
-        qty: 1,
-      };
-      const found = cart.find((c) => c.id === item.id);
-      if (found) found.qty += 1;
-      else cart.push(item);
-      renderCart();
+  if (navToggle && mainNav) {
+    navToggle.addEventListener("click", () => {
+      const isOpen = navToggle.getAttribute("aria-expanded") === "true";
+      setNavOpen(!isOpen);
     });
-  });
 
-  /* ===== FORM VALIDATION (applies to all forms and standalone inputs) ===== */
-  function showError(input, message) {
-    if (!input) return;
-    clearError(input);
-    input.classList.add("input-error");
-    const msg = document.createElement("span");
-    msg.className = "error-msg";
-    msg.innerText = message;
-    input.insertAdjacentElement("afterend", msg);
+    if (typeof mobileNavQuery.addEventListener === "function") {
+      mobileNavQuery.addEventListener("change", () => syncNavState());
+    } else if (typeof mobileNavQuery.addListener === "function") {
+      mobileNavQuery.addListener(() => syncNavState());
+    }
+
+    syncNavState();
+  }
+
+  if (bookingDate) {
+    const now = new Date();
+    now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
+    bookingDate.min = now.toISOString().slice(0, 16);
+  }
+
+  if (bookingInvoiceUrl) {
+    window.open(bookingInvoiceUrl, "_blank", "noopener");
+    if (window.history && typeof window.history.replaceState === "function") {
+      const cleanUrl = new URL(window.location.href);
+      cleanUrl.searchParams.delete("booking_invoice");
+      window.history.replaceState({}, "", cleanUrl.toString());
+    }
+  }
+
+  function formatCurrency(value) {
+    return "\u20b9" + Number(value).toFixed(2);
   }
 
   function clearError(input) {
     if (!input) return;
     input.classList.remove("input-error");
-    const next = input.nextElementSibling;
-    if (next && next.classList && next.classList.contains("error-msg"))
-      next.remove();
+    const errorEl = input.parentElement?.querySelector(".error-msg");
+    if (errorEl) errorEl.remove();
   }
 
-  function validateField(input) {
-    if (!input) return true;
+  function showError(input, message) {
+    if (!input) return;
     clearError(input);
-    const val = (input.value || "").trim();
+    input.classList.add("input-error");
+    const errorEl = document.createElement("div");
+    errorEl.className = "error-msg";
+    errorEl.textContent = message;
+    input.parentElement?.appendChild(errorEl);
+  }
 
-    if (input.hasAttribute("required") && !val) {
-      showError(input, "This field is required");
+  function validateInput(input) {
+    if (!input) return true;
+
+    clearError(input);
+    const value = input.value.trim();
+
+    if (input.hasAttribute("required") && value === "") {
+      showError(input, "This field is required.");
       return false;
     }
 
-    if (input.type === "tel" && val) {
-      const re = /^\d{10,15}$/;
-      if (!re.test(val)) {
-        showError(input, "Enter a valid phone number (10–15 digits)");
+    if (input.dataset.rule === "name" && value !== "") {
+      if (!/^[\p{L} ]{2,}$/u.test(value)) {
+        showError(input, "Enter at least 2 letters using a valid name.");
         return false;
       }
     }
 
-    if (input.type === "datetime-local" && val) {
-      const selected = new Date(val);
-      const now = new Date();
-      if (isNaN(selected.getTime())) {
-        showError(input, "Invalid date/time");
-        return false;
-      }
-      if (selected.getTime() < now.getTime() - 60000) {
-        showError(input, "Select a future date and time");
+    if (input.dataset.rule === "phone" && value !== "") {
+      if (!/^[6-9]\d{9}$/.test(value)) {
+        showError(input, "Enter a valid 10-digit Indian mobile number.");
         return false;
       }
     }
 
-    if (input.type === "number" && val) {
-      const num = Number(val);
-      const min = input.hasAttribute("min")
-        ? Number(input.getAttribute("min"))
-        : null;
-      if (min !== null && num < min) {
-        showError(input, `Value must be at least ${min}`);
+    if (input.type === "number" && value !== "") {
+      const num = Number(value);
+      const min = Number(input.min || 0);
+      if (Number.isNaN(num) || num < min) {
+        showError(input, `Value must be at least ${min}.`);
         return false;
       }
     }
 
-    if (input.hasAttribute("pattern") && val) {
-      const p = input.getAttribute("pattern");
-      try {
-        const re = new RegExp("^" + p + "$");
-        if (!re.test(val)) {
-          showError(input, "Invalid format");
-          return false;
-        }
-      } catch (e) {
-        // ignore invalid pattern
+    if (input.type === "datetime-local" && value !== "") {
+      const selected = new Date(value);
+      if (Number.isNaN(selected.getTime())) {
+        showError(input, "Select a valid date and time.");
+        return false;
+      }
+
+      if (selected.getTime() < Date.now() - 60000) {
+        showError(input, "Please choose a future date and time.");
+        return false;
       }
     }
 
     return true;
   }
 
-  // validate all forms on submit
-  document.querySelectorAll("form").forEach((form) => {
-    form.addEventListener("submit", (e) => {
-      let valid = true;
-      const inputs = Array.from(
-        form.querySelectorAll("input, textarea, select")
-      );
-      for (const inp of inputs) {
-        if (!validateField(inp)) valid = false;
-      }
-      if (!valid) {
-        e.preventDefault();
-        const firstErr = form.querySelector(".input-error");
-        if (firstErr) firstErr.focus();
-      }
-    });
+  function renderCart() {
+    if (!cartItemsEl || !cartTotalEl) return;
 
-    // live validation
-    form.addEventListener("input", (ev) => {
-      const target = ev.target;
-      if (
-        target &&
-        (target.tagName === "INPUT" ||
-          target.tagName === "TEXTAREA" ||
-          target.tagName === "SELECT")
-      ) {
-        validateField(target);
-      }
-    });
+    if (cart.length === 0) {
+      cartItemsEl.innerHTML = '<p class="muted">No items added.</p>';
+      cartTotalEl.textContent = formatCurrency(0);
+      return;
+    }
 
-    form.addEventListener(
-      "blur",
-      (ev) => {
-        const target = ev.target;
-        if (
-          target &&
-          (target.tagName === "INPUT" ||
-            target.tagName === "TEXTAREA" ||
-            target.tagName === "SELECT")
-        ) {
-          validateField(target);
-        }
-      },
-      true
-    );
+    let total = 0;
+    cartItemsEl.innerHTML = cart
+      .map((item, index) => {
+        const lineTotal = item.price * item.qty;
+        total += lineTotal;
+
+        return `
+          <div class="cart-row">
+            <div class="cart-copy">
+              <strong>${escapeHtml(item.name)}</strong>
+              <small>${formatCurrency(item.price)} x ${item.qty}</small>
+            </div>
+            <div class="cart-actions">
+              <button class="qty-btn" type="button" data-index="${index}" data-delta="-1">-</button>
+              <span>${item.qty}</span>
+              <button class="qty-btn" type="button" data-index="${index}" data-delta="1">+</button>
+              <button class="remove-btn" type="button" data-index="${index}">Remove</button>
+            </div>
+          </div>
+        `;
+      })
+      .join("");
+
+    cartTotalEl.textContent = formatCurrency(total);
+  }
+
+  function addToCart(item) {
+    const existing = cart.find((entry) => entry.id === item.id);
+    if (existing) {
+      existing.qty += 1;
+    } else {
+      cart.push({ ...item, qty: 1 });
+    }
+
+    renderCart();
+  }
+
+  function escapeHtml(value) {
+    return String(value ?? "").replace(/[&<>"']/g, (char) => {
+      return {
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;",
+      }[char];
+    });
+  }
+
+  document.querySelectorAll(".add-to-cart").forEach((button) => {
+    button.addEventListener("click", () => {
+      const itemEl = button.closest(".menu-item");
+      if (!itemEl) return;
+
+      addToCart({
+        id: itemEl.dataset.id || "",
+        name: itemEl.dataset.name || "Item",
+        price: Number(itemEl.dataset.price || 0),
+      });
+    });
   });
 
-  // order now (validates standalone inputs before placing order)
-  const orderBtn = document.getElementById("orderNowBtn");
-  if (orderBtn) {
-    orderBtn.addEventListener("click", (e) => {
-      const nameInput = document.getElementById("custName");
-      const phoneInput = document.getElementById("custPhone");
-      const validName = validateField(nameInput);
-      const validPhone = validateField(phoneInput);
+  if (cartItemsEl) {
+    cartItemsEl.addEventListener("click", (event) => {
+      const qtyButton = event.target.closest(".qty-btn");
+      const removeButton = event.target.closest(".remove-btn");
 
-      if (!validName || !validPhone) {
-        e.preventDefault();
-        alert("Please fix highlighted fields before ordering.");
+      if (qtyButton) {
+        const index = Number(qtyButton.dataset.index);
+        const delta = Number(qtyButton.dataset.delta);
+        if (!cart[index]) return;
+
+        cart[index].qty += delta;
+        if (cart[index].qty <= 0) {
+          cart.splice(index, 1);
+        }
+
+        renderCart();
+        return;
+      }
+
+      if (removeButton) {
+        const index = Number(removeButton.dataset.index);
+        if (!Number.isNaN(index)) {
+          cart.splice(index, 1);
+          renderCart();
+        }
+      }
+    });
+  }
+
+  document.querySelectorAll(".menu-thumb, .gallery-thumb").forEach((img) => {
+    img.addEventListener("click", () => {
+      if (!modal || !modalImg) return;
+      modal.setAttribute("aria-hidden", "false");
+      modalImg.src = img.src;
+      modalImg.alt = img.alt || "Preview";
+    });
+  });
+
+  function closeModal() {
+    if (!modal || !modalImg) return;
+    modal.setAttribute("aria-hidden", "true");
+    modalImg.removeAttribute("src");
+    modalImg.alt = "";
+  }
+
+  if (modalClose) {
+    modalClose.addEventListener("click", closeModal);
+  }
+
+  if (modal) {
+    modal.addEventListener("click", (event) => {
+      if (event.target === modal) {
+        closeModal();
+      }
+    });
+  }
+
+  [customerName, customerPhone, bookingDate, deliveryType].forEach((input) => {
+    if (!input) return;
+    input.addEventListener("input", () => validateInput(input));
+    input.addEventListener("blur", () => validateInput(input));
+  });
+
+  if (bookingForm) {
+    bookingForm.addEventListener("submit", (event) => {
+      const inputs = Array.from(
+        bookingForm.querySelectorAll("input, textarea, select")
+      );
+      const valid = inputs.every((input) => validateInput(input));
+
+      if (!valid) {
+        event.preventDefault();
+        bookingForm.querySelector(".input-error")?.focus();
+      }
+    });
+  }
+
+  if (orderBtn) {
+    orderBtn.addEventListener("click", async () => {
+      const validName = validateInput(customerName);
+      const validPhone = validateInput(customerPhone);
+      const validDeliveryType = validateInput(deliveryType);
+
+      if (!validName || !validPhone || !validDeliveryType) {
         return;
       }
 
       if (cart.length === 0) {
-        e.preventDefault();
-        alert("Cart is empty");
+        window.alert("Your cart is empty.");
         return;
       }
 
-      const name = nameInput.value.trim();
-      const phone = phoneInput.value.trim();
+      orderBtn.disabled = true;
+      orderBtn.textContent = "Placing Order...";
 
-      fetch("place_order.php", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, phone, cart }),
-      })
-        .then((res) => res.json())
-        .then((data) => {
-          if (data.success) {
-            window.open(data.whatsapp, "_blank");
-            cart = [];
-            renderCart();
-            nameInput.value = "";
-            phoneInput.value = "";
-          } else alert("Order failed");
-        })
-        .catch(() => alert("Server error"));
+      try {
+        const response = await fetch("place_order.php", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: customerName.value.trim(),
+            phone: customerPhone.value.trim(),
+            delivery_type: deliveryType.value,
+            cart,
+          }),
+        });
+
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+          throw new Error(data.message || "Order failed.");
+        }
+
+        cart.length = 0;
+        renderCart();
+        customerName.value = "";
+        customerPhone.value = "";
+        if (deliveryType) {
+          deliveryType.value = "";
+        }
+        if (data.invoice_url) {
+          window.open(data.invoice_url, "_blank", "noopener");
+        }
+        window.alert(
+          data.message ||
+            `Order #${data.order_id} placed successfully. Your receipt is ready to view.`
+        );
+      } catch (error) {
+        window.alert(error.message || "Server error.");
+      } finally {
+        orderBtn.disabled = false;
+        orderBtn.textContent = "Order Now";
+      }
     });
   }
 
-  // initial render
   renderCart();
 });
