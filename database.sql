@@ -14,6 +14,10 @@ DROP TABLE IF EXISTS `menu`;
 DROP TABLE IF EXISTS `menu_items`;
 DROP TABLE IF EXISTS `orders`;
 DROP TABLE IF EXISTS `bookings`;
+DROP TABLE IF EXISTS `customer_booking_links`;
+DROP TABLE IF EXISTS `customer_order_links`;
+DROP TABLE IF EXISTS `customer_users`;
+DROP TABLE IF EXISTS `restaurants`;
 DROP TABLE IF EXISTS `admins`;
 
 -- Admins
@@ -22,17 +26,80 @@ CREATE TABLE `admins` (
   `username` VARCHAR(100) NOT NULL UNIQUE,
   `display_name` VARCHAR(120) NULL,
   `mobile` VARCHAR(20) NULL UNIQUE,
+  `tenant_db` VARCHAR(128) NULL,
+  `tenant_initialized` TINYINT(1) NOT NULL DEFAULT 0,
   `photo` VARCHAR(1000) NULL,
   `password` VARCHAR(255) NOT NULL,
   `is_owner` TINYINT(1) NOT NULL DEFAULT 0,
+  `is_active` TINYINT(1) NOT NULL DEFAULT 1,
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- preserve existing admin (use existing hash)
-INSERT INTO `admins` (`id`, `username`, `display_name`, `mobile`, `photo`, `password`, `is_owner`, `created_at`) VALUES
-(1, 'trikut', 'Trikut Admin', NULL, NULL, '$2y$10$fc2mxeIdiAn.xPfEZnrsa.76osgD4F4nxCPmpxFEX4MNDoFjtXKxS', 1, NOW());
+INSERT INTO `admins` (`id`, `username`, `display_name`, `mobile`, `tenant_db`, `tenant_initialized`, `photo`, `password`, `is_owner`, `is_active`, `created_at`) VALUES
+(1, 'trikut', 'Trikut Admin', NULL, 'trikut_admin_1_trikut', 0, NULL, '$2y$10$fc2mxeIdiAn.xPfEZnrsa.76osgD4F4nxCPmpxFEX4MNDoFjtXKxS', 1, 1, NOW());
 
 ALTER TABLE `admins` MODIFY `id` INT UNSIGNED NOT NULL AUTO_INCREMENT;
+
+CREATE TABLE `restaurants` (
+  `id` INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  `owner_admin_id` INT UNSIGNED NOT NULL,
+  `name` VARCHAR(160) NOT NULL,
+  `slug` VARCHAR(160) NOT NULL UNIQUE,
+  `phone` VARCHAR(20) NULL,
+  `email` VARCHAR(190) NULL,
+  `address` VARCHAR(255) NULL,
+  `logo` VARCHAR(1000) NULL,
+  `is_active` TINYINT(1) NOT NULL DEFAULT 1,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY `uniq_restaurants_owner_admin_id` (`owner_admin_id`),
+  INDEX (`is_active`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+INSERT INTO `restaurants` (`id`, `owner_admin_id`, `name`, `slug`, `is_active`, `created_at`, `updated_at`) VALUES
+(1, 1, 'Trikut Restaurant & Cafe', 'trikut-restaurant-cafe', 1, NOW(), NOW());
+
+CREATE TABLE `customer_users` (
+  `id` INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  `name` VARCHAR(120) NOT NULL,
+  `email` VARCHAR(190) NOT NULL UNIQUE,
+  `mobile` VARCHAR(20) NOT NULL UNIQUE,
+  `password` VARCHAR(255) NOT NULL,
+  `is_active` TINYINT(1) NOT NULL DEFAULT 1,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `last_login_at` DATETIME NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE `customer_order_links` (
+  `id` INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  `customer_id` INT UNSIGNED NOT NULL,
+  `admin_id` INT UNSIGNED NOT NULL,
+  `restaurant_slug` VARCHAR(160) NOT NULL,
+  `restaurant_name` VARCHAR(160) NOT NULL,
+  `tenant_order_id` INT UNSIGNED NOT NULL,
+  `total` DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+  `status` VARCHAR(30) NOT NULL DEFAULT 'new',
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX (`customer_id`),
+  INDEX (`admin_id`),
+  INDEX (`created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE `customer_booking_links` (
+  `id` INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  `customer_id` INT UNSIGNED NOT NULL,
+  `admin_id` INT UNSIGNED NOT NULL,
+  `restaurant_slug` VARCHAR(160) NOT NULL,
+  `restaurant_name` VARCHAR(160) NOT NULL,
+  `tenant_booking_id` INT UNSIGNED NOT NULL,
+  `booking_date` DATETIME NOT NULL,
+  `guest_count` SMALLINT UNSIGNED NOT NULL DEFAULT 1,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX (`customer_id`),
+  INDEX (`admin_id`),
+  INDEX (`created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Bookings (normalized)
 CREATE TABLE `bookings` (

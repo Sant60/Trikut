@@ -4,22 +4,30 @@ require_once __DIR__ . '/../includes/db.php';
 require_once __DIR__ . '/../includes/app.php';
 require_once __DIR__ . '/../includes/hero_media.php';
 require_once __DIR__ . '/../includes/admin_profile.php';
+require_once __DIR__ . '/../includes/invoice.php';
+require_once __DIR__ . '/../includes/site.php';
 require_once __DIR__ . '/../includes/tenant.php';
 
 ensure_admin_profile_schema($pdo);
-ensure_multi_admin_schema($pdo);
 $currentAdminId = (int) $_SESSION['admin'];
 $isOwnerAdmin = is_owner_admin($pdo, $currentAdminId);
+$currentRole = admin_role($pdo, $currentAdminId);
+$canManageContent = admin_can($pdo, $currentAdminId, 'manage_menu');
+$canManageOrders = admin_can($pdo, $currentAdminId, 'manage_orders');
+$canManageBookings = admin_can($pdo, $currentAdminId, 'manage_bookings');
 $adminProfile = fetch_admin_profile($pdo, (int) $_SESSION['admin']) ?? [];
+$siteAdminId = site_admin_id($rootPdo);
+$sitePdo = site_pdo($rootPdo);
 $adminName = $adminProfile['display_name'] ?? ($adminProfile['username'] ?? 'Admin');
 $adminMobile = $adminProfile['mobile'] ?? '';
 $adminPhotoUrl = !empty($adminProfile['photo']) ? app_url($adminProfile['photo']) : '';
+$restaurantName = site_restaurant_name();
+$restaurantPublicUrl = app_url('index.php');
 
-function safe_count(PDO $pdo, string $table, int $adminId): int
+function safe_count(PDO $sitePdo, string $table): int
 {
     try {
-        $stmt = $pdo->prepare("SELECT COUNT(*) AS c FROM `$table` WHERE admin_id = ?");
-        $stmt->execute([$adminId]);
+        $stmt = $sitePdo->query("SELECT COUNT(*) AS c FROM `$table`");
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
         return (int) ($row['c'] ?? 0);
     } catch (Throwable $e) {
@@ -28,10 +36,10 @@ function safe_count(PDO $pdo, string $table, int $adminId): int
 }
 
 $counts = [
-    'orders' => safe_count($pdo, 'orders', $currentAdminId),
-    'bookings' => safe_count($pdo, 'bookings', $currentAdminId),
-    'menu' => safe_count($pdo, 'menu', $currentAdminId),
-    'gallery' => safe_count($pdo, 'gallery', $currentAdminId),
+    'orders' => safe_count($sitePdo, 'orders'),
+    'bookings' => safe_count($sitePdo, 'bookings'),
+    'menu' => safe_count($sitePdo, 'menu'),
+    'gallery' => safe_count($sitePdo, 'gallery'),
     'hero' => 0,
 ];
 
@@ -42,35 +50,31 @@ $recentGallery = [];
 $currentHero = null;
 
 try {
-    $stmt = $pdo->prepare('SELECT id, name, phone, total, status, created_at FROM orders WHERE admin_id = ? ORDER BY id DESC LIMIT 6');
-    $stmt->execute([$currentAdminId]);
+    $stmt = $sitePdo->query('SELECT id, name, phone, total, status, created_at FROM orders ORDER BY id DESC LIMIT 6');
     $recentOrders = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Throwable $e) {
 }
 
 try {
-    $stmt = $pdo->prepare('SELECT id, name, phone, date, size, created_at FROM bookings WHERE admin_id = ? ORDER BY id DESC LIMIT 6');
-    $stmt->execute([$currentAdminId]);
+    $stmt = $sitePdo->query('SELECT id, name, phone, date, size, created_at FROM bookings ORDER BY id DESC LIMIT 6');
     $recentBookings = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Throwable $e) {
 }
 
 try {
-    $stmt = $pdo->prepare('SELECT id, name, price, img, active FROM menu WHERE admin_id = ? ORDER BY id DESC LIMIT 6');
-    $stmt->execute([$currentAdminId]);
+    $stmt = $sitePdo->query('SELECT id, name, price, img, active FROM menu ORDER BY id DESC LIMIT 6');
     $recentMenu = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Throwable $e) {
 }
 
 try {
-    $stmt = $pdo->prepare('SELECT id, img, caption, created_at FROM gallery WHERE admin_id = ? ORDER BY id DESC LIMIT 6');
-    $stmt->execute([$currentAdminId]);
+    $stmt = $sitePdo->query('SELECT id, img, caption, created_at FROM gallery ORDER BY id DESC LIMIT 6');
     $recentGallery = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Throwable $e) {
 }
 
 try {
-    $currentHero = fetch_current_hero_media($pdo, $currentAdminId);
+    $currentHero = fetch_current_hero_media($sitePdo, $siteAdminId);
     $counts['hero'] = $currentHero ? 1 : 0;
 } catch (Throwable $e) {
 }
@@ -125,6 +129,8 @@ $latestBookingId = isset($recentBookings[0]['id']) ? (int) $recentBookings[0]['i
         <a href="bookings.php">Bookings</a>
         <?php if ($isOwnerAdmin): ?>
           <a href="register.php">Add Admin</a>
+          <a href="manage_admins.php">Manage Admins</a>
+          <a href="reset_admin_password.php">Reset Admin Password</a>
         <?php endif; ?>
         <a href="logout.php">Logout</a>
       </nav>
@@ -135,16 +141,23 @@ $latestBookingId = isset($recentBookings[0]['id']) ? (int) $recentBookings[0]['i
       <div class="admin-panel-header admin-header">
         <div>
           <h1 class="admin-heading">Dashboard</h1>
-          <div class="admin-subtitle">Overview of current menu, gallery, orders, and reservations.</div>
+          <div class="admin-subtitle">Overview of the shared restaurant website, menu, gallery, orders, and reservations. Your current role is <?php echo htmlspecialchars(admin_role_label($currentRole), ENT_QUOTES); ?>.</div>
         </div>
         <div class="admin-header-actions">
+          <?php if ($restaurantPublicUrl !== ''): ?>
+            <a class="admin-btn-secondary" href="<?php echo htmlspecialchars($restaurantPublicUrl, ENT_QUOTES); ?>" target="_blank" rel="noopener">Open Restaurant Page</a>
+          <?php endif; ?>
           <a class="admin-btn-primary" href="orders.php">View Orders</a>
-          <a class="admin-btn-secondary" href="menu.php">Manage Menu</a>
-          <a class="admin-btn-secondary" href="hero.php">Manage Hero</a>
-          <a class="admin-btn-secondary" href="gallery.php">Manage Gallery</a>
+          <?php if ($canManageContent): ?>
+            <a class="admin-btn-secondary" href="menu.php">Manage Menu</a>
+            <a class="admin-btn-secondary" href="hero.php">Manage Hero</a>
+            <a class="admin-btn-secondary" href="gallery.php">Manage Gallery</a>
+          <?php endif; ?>
           <a class="admin-btn-secondary" href="profile.php">Manage Profile</a>
           <?php if ($isOwnerAdmin): ?>
             <a class="admin-btn-secondary" href="register.php">Add Admin</a>
+            <a class="admin-btn-secondary" href="manage_admins.php">Manage Admins</a>
+            <a class="admin-btn-secondary" href="reset_admin_password.php">Reset Admin Password</a>
           <?php endif; ?>
           <button class="admin-btn-alert" id="enableNotificationsBtn" type="button" aria-pressed="false">Alerts Off</button>
         </div>
@@ -190,9 +203,11 @@ $latestBookingId = isset($recentBookings[0]['id']) ? (int) $recentBookings[0]['i
               <img src="<?php echo htmlspecialchars(app_url($currentHero['img']), ENT_QUOTES); ?>" alt="<?php echo htmlspecialchars($currentHero['caption'] ?: 'Hero image', ENT_QUOTES); ?>">
             </div>
             <div style="margin-top:10px"><?php echo htmlspecialchars($currentHero['caption'] ?? '', ENT_QUOTES); ?></div>
-            <div class="admin-form-actions" style="margin-top:12px">
-              <a class="admin-btn-secondary" href="hero.php">Update Hero Image</a>
-            </div>
+            <?php if ($canManageContent): ?>
+              <div class="admin-form-actions" style="margin-top:12px">
+                <a class="admin-btn-secondary" href="hero.php">Update Hero Image</a>
+              </div>
+            <?php endif; ?>
           <?php endif; ?>
         </section>
 
@@ -209,8 +224,8 @@ $latestBookingId = isset($recentBookings[0]['id']) ? (int) $recentBookings[0]['i
                 <tbody>
                   <?php foreach ($recentOrders as $order): ?>
                     <?php
-                    $orderInvoiceRelative = 'assets/invoices/order_' . (int) $order['id'] . '.pdf';
-                    $orderInvoiceFile = dirname(__DIR__) . '/assets/invoices/order_' . (int) $order['id'] . '.pdf';
+                    $orderInvoiceUrl = app_url('download_invoice.php?type=order&id=' . (int) $order['id'] . '&admin_id=' . $siteAdminId);
+                    $orderInvoiceFile = existing_invoice_path('order', (int) $order['id'], $siteAdminId);
                     ?>
                     <tr>
                       <td>#<?php echo (int) $order['id']; ?></td>
@@ -219,7 +234,7 @@ $latestBookingId = isset($recentBookings[0]['id']) ? (int) $recentBookings[0]['i
                       <td>&#8377;<?php echo htmlspecialchars((string) ($order['total'] ?? '0.00'), ENT_QUOTES); ?></td>
                       <td>
                         <?php if (is_file($orderInvoiceFile)): ?>
-                          <a class="admin-btn-secondary" href="<?php echo htmlspecialchars(app_url($orderInvoiceRelative), ENT_QUOTES); ?>" target="_blank" rel="noopener">Invoice</a>
+                          <a class="admin-btn-secondary" href="<?php echo htmlspecialchars($orderInvoiceUrl, ENT_QUOTES); ?>" target="_blank" rel="noopener">Invoice</a>
                         <?php else: ?>
                           <span class="admin-muted">-</span>
                         <?php endif; ?>
@@ -247,8 +262,8 @@ $latestBookingId = isset($recentBookings[0]['id']) ? (int) $recentBookings[0]['i
                 <tbody>
                   <?php foreach ($recentBookings as $booking): ?>
                     <?php
-                    $bookingInvoiceRelative = 'assets/invoices/booking_' . (int) $booking['id'] . '.pdf';
-                    $bookingInvoiceFile = dirname(__DIR__) . '/assets/invoices/booking_' . (int) $booking['id'] . '.pdf';
+                    $bookingInvoiceUrl = app_url('download_invoice.php?type=booking&id=' . (int) $booking['id'] . '&admin_id=' . $siteAdminId);
+                    $bookingInvoiceFile = existing_invoice_path('booking', (int) $booking['id'], $siteAdminId);
                     ?>
                     <tr>
                       <td>#<?php echo (int) $booking['id']; ?></td>
@@ -258,7 +273,7 @@ $latestBookingId = isset($recentBookings[0]['id']) ? (int) $recentBookings[0]['i
                       <td><?php echo htmlspecialchars((string) ($booking['size'] ?? '-'), ENT_QUOTES); ?></td>
                       <td>
                         <?php if (is_file($bookingInvoiceFile)): ?>
-                          <a class="admin-btn-secondary" href="<?php echo htmlspecialchars(app_url($bookingInvoiceRelative), ENT_QUOTES); ?>" target="_blank" rel="noopener">Invoice</a>
+                          <a class="admin-btn-secondary" href="<?php echo htmlspecialchars($bookingInvoiceUrl, ENT_QUOTES); ?>" target="_blank" rel="noopener">Invoice</a>
                         <?php else: ?>
                           <span class="admin-muted">-</span>
                         <?php endif; ?>

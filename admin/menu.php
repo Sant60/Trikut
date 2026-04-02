@@ -5,16 +5,22 @@ require_once __DIR__ . '/../includes/app.php';
 require_once __DIR__ . '/../includes/media.php';
 require_once __DIR__ . '/../includes/security.php';
 require_once __DIR__ . '/../includes/admin_profile.php';
-require_once __DIR__ . '/../includes/tenant.php';
+require_once __DIR__ . '/../includes/site.php';
 
 $errors = [];
 $projectRoot = dirname(__DIR__);
 $menuDir = $projectRoot . '/assets/menu';
 $menuPublicDir = '/assets/menu';
 $currentAdminId = (int) $_SESSION['admin'];
-ensure_multi_admin_schema($pdo);
+$canManageMenu = admin_can($pdo, $currentAdminId, 'manage_menu');
+$sitePdo = site_pdo($rootPdo);
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (!$canManageMenu) {
+        http_response_code(403);
+        exit('You do not have permission to change menu data.');
+    }
+
     if (!verify_csrf_request()) {
         $errors[] = 'Invalid request token.';
     }
@@ -51,13 +57,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         if (empty($errors)) {
             if ($action === 'add') {
-                $stmt = $pdo->prepare('INSERT INTO menu (admin_id, name, description, price, img, active, created_at) VALUES (?, ?, ?, ?, ?, 1, NOW())');
-                $stmt->execute([$currentAdminId, $name, $desc ?: null, number_format((float) $price, 2, '.', ''), $img ?: null]);
+                $stmt = $sitePdo->prepare('INSERT INTO menu (name, description, price, img, active, created_at) VALUES (?, ?, ?, ?, 1, NOW())');
+                $stmt->execute([$name, $desc ?: null, number_format((float) $price, 2, '.', ''), $img ?: null]);
             } else {
                 $id = (int) ($_POST['id'] ?? 0);
                 if ($id > 0) {
-                    $stmt = $pdo->prepare('UPDATE menu SET name = ?, description = ?, price = ?, img = ? WHERE id = ? AND admin_id = ? LIMIT 1');
-                    $stmt->execute([$name, $desc ?: null, number_format((float) $price, 2, '.', ''), $img ?: null, $id, $currentAdminId]);
+                    $stmt = $sitePdo->prepare('UPDATE menu SET name = ?, description = ?, price = ?, img = ? WHERE id = ? LIMIT 1');
+                    $stmt->execute([$name, $desc ?: null, number_format((float) $price, 2, '.', ''), $img ?: null, $id]);
 
                     if ($uploadedImage !== null && $currentImage !== '' && $currentImage !== $uploadedImage) {
                         remove_local_project_file($currentImage, $projectRoot);
@@ -76,15 +82,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $id = (int) ($_POST['id'] ?? 0);
         if ($id > 0) {
             try {
-                $stmt = $pdo->prepare('SELECT img FROM menu WHERE id = ? AND admin_id = ? LIMIT 1');
-                $stmt->execute([$id, $currentAdminId]);
+                $stmt = $sitePdo->prepare('SELECT img FROM menu WHERE id = ? LIMIT 1');
+                $stmt->execute([$id]);
                 $row = $stmt->fetch(PDO::FETCH_ASSOC);
                 if ($row) {
                     remove_local_project_file($row['img'] ?? '', $projectRoot);
                 }
 
-                $stmt = $pdo->prepare('DELETE FROM menu WHERE id = ? AND admin_id = ? LIMIT 1');
-                $stmt->execute([$id, $currentAdminId]);
+                $stmt = $sitePdo->prepare('DELETE FROM menu WHERE id = ? LIMIT 1');
+                $stmt->execute([$id]);
             } catch (Throwable $e) {
                 $errors[] = 'Failed to delete menu item.';
             }
@@ -95,8 +101,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } elseif (empty($errors) && $action === 'toggle') {
         $id = (int) ($_POST['id'] ?? 0);
         if ($id > 0) {
-            $stmt = $pdo->prepare('UPDATE menu SET active = 1 - active WHERE id = ? AND admin_id = ? LIMIT 1');
-            $stmt->execute([$id, $currentAdminId]);
+            $stmt = $sitePdo->prepare('UPDATE menu SET active = 1 - active WHERE id = ? LIMIT 1');
+            $stmt->execute([$id]);
         }
 
         header('Location: menu.php');
@@ -108,16 +114,15 @@ $editItem = null;
 if (isset($_GET['edit_id'])) {
     $editId = (int) $_GET['edit_id'];
     if ($editId > 0) {
-        $stmt = $pdo->prepare('SELECT * FROM menu WHERE id = ? AND admin_id = ? LIMIT 1');
-        $stmt->execute([$editId, $currentAdminId]);
+        $stmt = $sitePdo->prepare('SELECT * FROM menu WHERE id = ? LIMIT 1');
+        $stmt->execute([$editId]);
         $editItem = $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
     }
 }
 
 $items = [];
 try {
-    $stmt = $pdo->prepare('SELECT id, name, description, price, img, active, created_at FROM menu WHERE admin_id = ? ORDER BY id DESC');
-    $stmt->execute([$currentAdminId]);
+    $stmt = $sitePdo->query('SELECT id, name, description, price, img, active, created_at FROM menu ORDER BY id DESC');
     $items = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Throwable $e) {
     $items = [];
@@ -183,11 +188,13 @@ $adminPhotoUrl = !empty($adminProfile['photo']) ? app_url($adminProfile['photo']
       <header class="admin-header">
         <div>
           <h1 class="admin-heading">Menu Management</h1>
-          <div class="admin-subtitle">Add dish images directly or use an external image URL.</div>
+          <div class="admin-subtitle"><?php echo $canManageMenu ? 'Add dish images directly or use an external image URL.' : 'Read-only menu view for employee access.'; ?></div>
         </div>
+        <?php if ($canManageMenu): ?>
         <div>
           <a class="admin-btn-primary" href="#addForm">Add New Dish</a>
         </div>
+        <?php endif; ?>
       </header>
 
       <section class="admin-card" aria-labelledby="itemsTable">
@@ -216,21 +223,25 @@ $adminPhotoUrl = !empty($adminProfile['photo']) ? app_url($adminProfile['photo']
                   <td><?php echo $it['active'] ? 'Yes' : 'No'; ?></td>
                   <td><?php echo htmlspecialchars($it['created_at'] ?? '-', ENT_QUOTES); ?></td>
                   <td>
-                    <div class="admin-inline-actions">
-                    <a class="admin-btn-secondary" href="menu.php?edit_id=<?php echo (int) $it['id']; ?>">Edit</a>
-                    <form method="post" onsubmit="return confirm('Toggle active state?');" style="display:inline">
-                      <?php echo csrf_input(); ?>
-                      <input type="hidden" name="id" value="<?php echo (int) $it['id']; ?>">
-                      <input type="hidden" name="action" value="toggle">
-                      <button class="admin-btn-secondary" type="submit">Toggle</button>
-                    </form>
-                    <form method="post" onsubmit="return confirm('Delete this item?');" style="display:inline">
-                      <?php echo csrf_input(); ?>
-                      <input type="hidden" name="id" value="<?php echo (int) $it['id']; ?>">
-                      <input type="hidden" name="action" value="delete">
-                      <button class="admin-btn-danger" type="submit">Delete</button>
-                    </form>
-                    </div>
+                    <?php if ($canManageMenu): ?>
+                      <div class="admin-inline-actions">
+                      <a class="admin-btn-secondary" href="menu.php?edit_id=<?php echo (int) $it['id']; ?>">Edit</a>
+                      <form method="post" onsubmit="return confirm('Toggle active state?');" style="display:inline">
+                        <?php echo csrf_input(); ?>
+                        <input type="hidden" name="id" value="<?php echo (int) $it['id']; ?>">
+                        <input type="hidden" name="action" value="toggle">
+                        <button class="admin-btn-secondary" type="submit">Toggle</button>
+                      </form>
+                      <form method="post" onsubmit="return confirm('Delete this item?');" style="display:inline">
+                        <?php echo csrf_input(); ?>
+                        <input type="hidden" name="id" value="<?php echo (int) $it['id']; ?>">
+                        <input type="hidden" name="action" value="delete">
+                        <button class="admin-btn-danger" type="submit">Delete</button>
+                      </form>
+                      </div>
+                    <?php else: ?>
+                      <span class="admin-muted">View only</span>
+                    <?php endif; ?>
                   </td>
                 </tr>
               <?php endforeach; ?>
@@ -239,6 +250,7 @@ $adminPhotoUrl = !empty($adminProfile['photo']) ? app_url($adminProfile['photo']
         <?php endif; ?>
       </section>
 
+      <?php if ($canManageMenu): ?>
       <section class="admin-card" id="addForm" aria-labelledby="addTitle">
         <h3 id="addTitle" style="margin:0 0 10px"><?php echo $editItem ? 'Edit Dish' : 'Add New Dish'; ?></h3>
 
@@ -268,17 +280,17 @@ $adminPhotoUrl = !empty($adminProfile['photo']) ? app_url($adminProfile['photo']
 
           <div class="admin-field">
             <label>Description</label>
-            <textarea name="description" rows="3"><?php echo htmlspecialchars($editItem['description'] ?? '', ENT_QUOTES); ?></textarea>
+            <textarea name="description" rows="3" maxlength="1500"><?php echo htmlspecialchars($editItem['description'] ?? '', ENT_QUOTES); ?></textarea>
           </div>
 
           <div class="admin-field is-compact">
             <label>Price (INR)</label>
-            <input name="price" type="text" inputmode="decimal" data-rule="price" required value="<?php echo htmlspecialchars($editItem['price'] ?? '', ENT_QUOTES); ?>">
+            <input name="price" type="text" inputmode="decimal" data-rule="price" maxlength="10" required value="<?php echo htmlspecialchars($editItem['price'] ?? '', ENT_QUOTES); ?>">
           </div>
 
           <div class="admin-field">
             <label>Upload Dish Image</label>
-            <input type="file" name="image" accept="image/jpeg,image/png,image/webp">
+            <input type="file" name="image" data-max-file-size="5242880" accept="image/jpeg,image/png,image/webp">
             <small>This works independently. Uploading a file saves it in the project and uses it for the dish.</small>
           </div>
 
@@ -307,6 +319,7 @@ $adminPhotoUrl = !empty($adminProfile['photo']) ? app_url($adminProfile['photo']
           </div>
         </form>
       </section>
+      <?php endif; ?>
     </main>
   </div>
   <script src="../Script/theme.js?v=<?php echo (int) (@filemtime(__DIR__ . '/../Script/theme.js') ?: time()); ?>"></script>

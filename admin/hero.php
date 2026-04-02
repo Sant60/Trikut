@@ -6,17 +6,25 @@ require_once __DIR__ . '/../includes/media.php';
 require_once __DIR__ . '/../includes/hero_media.php';
 require_once __DIR__ . '/../includes/security.php';
 require_once __DIR__ . '/../includes/admin_profile.php';
-require_once __DIR__ . '/../includes/tenant.php';
+require_once __DIR__ . '/../includes/site.php';
 
 $errors = [];
 $projectRoot = dirname(__DIR__);
 $heroDir = $projectRoot . '/assets/hero';
 $heroPublicDir = '/assets/hero';
+$siteAdminId = site_admin_id($rootPdo);
 $currentAdminId = (int) $_SESSION['admin'];
+$canManageHero = admin_can($pdo, $currentAdminId, 'manage_hero');
+$sitePdo = site_pdo($rootPdo);
 
-ensure_hero_media_table($pdo);
+ensure_hero_media_table($sitePdo);
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (!$canManageHero) {
+        http_response_code(403);
+        exit('You do not have permission to change hero media.');
+    }
+
     if (!verify_csrf_request()) {
         $errors[] = 'Invalid request token.';
     }
@@ -43,14 +51,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         if (empty($errors)) {
             try {
-                $current = fetch_current_hero_media($pdo, $currentAdminId);
+                $current = fetch_current_hero_media($sitePdo, $siteAdminId);
 
-                $pdo->beginTransaction();
-                $stmt = $pdo->prepare('DELETE FROM hero_media WHERE admin_id = ?');
-                $stmt->execute([$currentAdminId]);
-                $stmt = $pdo->prepare('INSERT INTO hero_media (admin_id, img, caption, created_at) VALUES (?, ?, ?, NOW())');
-                $stmt->execute([$currentAdminId, $storedPath, $caption ?: null]);
-                $pdo->commit();
+                $sitePdo->beginTransaction();
+                $sitePdo->exec('DELETE FROM hero_media');
+                $stmt = $sitePdo->prepare('INSERT INTO hero_media (img, caption, created_at) VALUES (?, ?, NOW())');
+                $stmt->execute([$storedPath, $caption ?: null]);
+                $sitePdo->commit();
 
                 if ($current && !empty($current['img']) && $current['img'] !== $storedPath) {
                     remove_local_project_file($current['img'], $projectRoot);
@@ -59,8 +66,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 header('Location: hero.php');
                 exit;
             } catch (Throwable $e) {
-                if ($pdo->inTransaction()) {
-                    $pdo->rollBack();
+                if ($sitePdo->inTransaction()) {
+                    $sitePdo->rollBack();
                 }
 
                 if ($uploadedImage !== null) {
@@ -72,9 +79,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     } elseif (empty($errors) && $action === 'delete') {
         try {
-            $current = fetch_current_hero_media($pdo, $currentAdminId);
-            $stmt = $pdo->prepare('DELETE FROM hero_media WHERE admin_id = ?');
-            $stmt->execute([$currentAdminId]);
+            $current = fetch_current_hero_media($sitePdo, $siteAdminId);
+            $sitePdo->exec('DELETE FROM hero_media');
 
             if ($current) {
                 remove_local_project_file($current['img'] ?? '', $projectRoot);
@@ -90,7 +96,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 $heroItem = null;
 try {
-    $heroItem = fetch_current_hero_media($pdo, $currentAdminId);
+    $heroItem = fetch_current_hero_media($sitePdo, $siteAdminId);
 } catch (Throwable $e) {
     $heroItem = null;
     $errors[] = 'Hero image data could not be loaded.';
@@ -156,7 +162,7 @@ $adminPhotoUrl = !empty($adminProfile['photo']) ? app_url($adminProfile['photo']
       <header class="admin-header">
         <div>
           <h1 class="admin-heading">Hero Image</h1>
-          <div class="admin-subtitle">Upload one dedicated homepage hero image without affecting the gallery.</div>
+          <div class="admin-subtitle"><?php echo $canManageHero ? 'Upload one dedicated homepage hero image without affecting the gallery.' : 'Read-only hero image view for employee access.'; ?></div>
         </div>
       </header>
 
@@ -168,18 +174,21 @@ $adminPhotoUrl = !empty($adminProfile['photo']) ? app_url($adminProfile['photo']
           </div>
           <div style="margin-top:10px"><?php echo htmlspecialchars($heroItem['caption'] ?? '', ENT_QUOTES); ?></div>
           <div class="admin-muted" style="margin-top:4px"><?php echo htmlspecialchars($heroItem['created_at'] ?? '-', ENT_QUOTES); ?></div>
-          <div class="admin-form-actions" style="margin-top:14px">
-            <form method="post" onsubmit="return confirm('Delete the current hero image?');">
-              <?php echo csrf_input(); ?>
-              <input type="hidden" name="action" value="delete">
-              <button class="admin-btn-danger" type="submit">Delete Hero Image</button>
-            </form>
-          </div>
+          <?php if ($canManageHero): ?>
+            <div class="admin-form-actions" style="margin-top:14px">
+              <form method="post" onsubmit="return confirm('Delete the current hero image?');">
+                <?php echo csrf_input(); ?>
+                <input type="hidden" name="action" value="delete">
+                <button class="admin-btn-danger" type="submit">Delete Hero Image</button>
+              </form>
+            </div>
+          <?php endif; ?>
         <?php else: ?>
           <div class="admin-empty">No dedicated hero image has been set yet.</div>
         <?php endif; ?>
       </section>
 
+      <?php if ($canManageHero): ?>
       <section class="admin-card">
         <h3 style="margin:0 0 10px">Upload / Replace Hero</h3>
         <?php if (!empty($errors)): ?>
@@ -204,7 +213,7 @@ $adminPhotoUrl = !empty($adminProfile['photo']) ? app_url($adminProfile['photo']
             </div>
             <div class="admin-field">
               <label>Upload Hero Image</label>
-              <input type="file" name="image" data-require-one="hero-source" accept="image/jpeg,image/png,image/webp">
+              <input type="file" name="image" data-require-one="hero-source" data-max-file-size="5242880" accept="image/jpeg,image/png,image/webp">
               <small>Uploading a new file replaces the current hero image.</small>
             </div>
           </div>
@@ -213,6 +222,7 @@ $adminPhotoUrl = !empty($adminProfile['photo']) ? app_url($adminProfile['photo']
           </div>
         </form>
       </section>
+      <?php endif; ?>
     </main>
   </div>
   <script src="../Script/theme.js?v=<?php echo (int) (@filemtime(__DIR__ . '/../Script/theme.js') ?: time()); ?>"></script>

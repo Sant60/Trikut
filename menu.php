@@ -2,18 +2,21 @@
 require_once __DIR__ . '/includes/db.php';
 require_once __DIR__ . '/includes/app.php';
 require_once __DIR__ . '/includes/security.php';
-require_once __DIR__ . '/includes/tenant.php';
+require_once __DIR__ . '/includes/site.php';
 
 $frontend_menu = [];
 $logoPath = __DIR__ . '/assets/logo.png';
 $hasLogo = is_file($logoPath);
 $styleVersion = @filemtime(__DIR__ . '/CSS/style.css') ?: time();
 $scriptVersion = @filemtime(__DIR__ . '/Script/script.js') ?: time();
-$publicAdminId = resolve_public_admin_id($pdo);
+$siteAdminId = site_admin_id($rootPdo);
+$sitePdo = site_pdo($rootPdo);
+$restaurantName = site_restaurant_name();
+$homePageUrl = app_url('index.php');
 
 try {
-    $menuStmt = $pdo->prepare('SELECT id, name, description, price, img FROM menu WHERE admin_id = ? AND active = 1 ORDER BY id ASC');
-    $menuStmt->execute([$publicAdminId]);
+    $menuStmt = $sitePdo->prepare('SELECT id, name, description, price, img FROM menu WHERE active = 1 ORDER BY id ASC');
+    $menuStmt->execute();
     $frontend_menu = $menuStmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Throwable $e) {
     $frontend_menu = [];
@@ -24,7 +27,7 @@ try {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Menu - Trikut Restaurant &amp; Cafe</title>
+  <title>Menu - <?php echo htmlspecialchars($restaurantName, ENT_QUOTES); ?></title>
   <script>
     (function () {
       try {
@@ -50,7 +53,7 @@ try {
           <div class="logo logo-fallback">TR</div>
         <?php endif; ?>
         <div>
-          <div class="eyebrow">Trikut Restaurant &amp; Cafe</div>
+          <div class="eyebrow"><?php echo htmlspecialchars($restaurantName, ENT_QUOTES); ?></div>
         </div>
       </div>
 
@@ -80,9 +83,9 @@ try {
         </button>
         <button class="nav-close" type="button" aria-label="Close navigation">&times;</button>
         <nav id="primaryNav" class="main-nav" aria-label="Primary">
-          <a href="<?php echo htmlspecialchars(app_url('index.php'), ENT_QUOTES); ?>">Home</a>
-          <a href="<?php echo htmlspecialchars(app_url('index.php#gallery'), ENT_QUOTES); ?>">Gallery</a>
-          <a href="<?php echo htmlspecialchars(app_url('index.php#book'), ENT_QUOTES); ?>">Reserve</a>
+          <a href="<?php echo htmlspecialchars($homePageUrl, ENT_QUOTES); ?>">Home</a>
+          <a href="<?php echo htmlspecialchars($homePageUrl . '#gallery', ENT_QUOTES); ?>">Gallery</a>
+          <a href="<?php echo htmlspecialchars($homePageUrl . '#book', ENT_QUOTES); ?>">Reserve</a>
           <a class="cta" href="#menuOrderArea">Order Here</a>
         </nav>
       </div>
@@ -94,11 +97,11 @@ try {
     <section class="menu-page-hero card">
       <div class="menu-page-copy">
         <p class="eyebrow">Full Menu</p>
-        <h1 class="section-title">Every live dish in one customer-friendly ordering page.</h1>
+        <h1 class="section-title">Every live dish in one simple ordering page.</h1>
         <p class="section-copy">Scroll through the full restaurant menu, add items directly to your cart, and place the order from this page without going back to the homepage.</p>
         <div class="hero-actions">
           <a class="hero-btn primary" href="#menuGrid">Browse Dishes</a>
-          <a class="hero-btn secondary" href="<?php echo htmlspecialchars(app_url('index.php'), ENT_QUOTES); ?>">Back to Home</a>
+          <a class="hero-btn secondary" href="<?php echo htmlspecialchars($homePageUrl, ENT_QUOTES); ?>">Back to Home</a>
         </div>
       </div>
       <div class="menu-page-meta">
@@ -175,12 +178,12 @@ try {
 
           <div class="field-group">
             <label for="custName">Customer Name</label>
-            <input id="custName" data-rule="name" placeholder="Your name" required>
+            <input id="custName" data-rule="name" maxlength="100" placeholder="Your name" required>
           </div>
 
           <div class="field-group">
             <label for="custPhone">Mobile Number</label>
-            <input id="custPhone" data-rule="phone" inputmode="numeric" maxlength="10" placeholder="10-digit mobile number" required>
+            <input id="custPhone" type="tel" data-rule="phone" inputmode="numeric" maxlength="13" placeholder="+91 9876543210" required>
           </div>
 
           <div class="field-group">
@@ -198,7 +201,7 @@ try {
     </div>
   </main>
 
-  <footer class="site-footer">&copy; <?php echo date('Y'); ?> Trikut Restaurant &amp; Cafe</footer>
+  <footer class="site-footer">&copy; <?php echo date('Y'); ?> <?php echo htmlspecialchars($restaurantName, ENT_QUOTES); ?></footer>
 
   <div id="imgModal" class="img-modal" aria-hidden="true">
     <button class="modal-close" type="button" aria-label="Close preview">&times;</button>
@@ -206,6 +209,7 @@ try {
   </div>
 
   <script src="Script/theme.js?v=<?php echo (int) $scriptVersion; ?>"></script>
+  <script src="Script/form-validation.js?v=<?php echo (int) (@filemtime(__DIR__ . '/Script/form-validation.js') ?: time()); ?>"></script>
   <script src="Script/script.js?v=<?php echo (int) $scriptVersion; ?>"></script>
 </body>
 </html>

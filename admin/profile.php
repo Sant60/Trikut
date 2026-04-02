@@ -4,11 +4,13 @@ require_once __DIR__ . '/../includes/db.php';
 require_once __DIR__ . '/../includes/app.php';
 require_once __DIR__ . '/../includes/security.php';
 require_once __DIR__ . '/../includes/admin_profile.php';
+require_once __DIR__ . '/../includes/site.php';
 require_once __DIR__ . '/../includes/tenant.php';
 
 ensure_admin_profile_schema($pdo);
 ensure_multi_admin_schema($pdo);
 $isOwnerAdmin = is_owner_admin($pdo, (int) $_SESSION['admin']);
+$currentRole = admin_role($pdo, (int) $_SESSION['admin']);
 
 $errors = [];
 $success = '';
@@ -115,7 +117,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 $adminName = $adminProfile['display_name'] ?: ($adminProfile['username'] ?? 'Admin');
 $adminPhotoUrl = !empty($adminProfile['photo']) ? app_url($adminProfile['photo']) : '';
-$publicProfileLink = app_url('index.php?admin=' . rawurlencode((string) ($adminProfile['mobile'] ?: $adminProfile['username'])));
+$publicProfileLink = app_url('index.php');
 ?>
 <!doctype html>
 <html lang="en">
@@ -164,6 +166,8 @@ $publicProfileLink = app_url('index.php?admin=' . rawurlencode((string) ($adminP
         <a href="bookings.php">Bookings</a>
         <?php if ($isOwnerAdmin): ?>
           <a href="register.php">Add Admin</a>
+          <a href="manage_admins.php">Manage Admins</a>
+          <a href="reset_admin_password.php">Reset Admin Password</a>
         <?php endif; ?>
         <a href="logout.php">Logout</a>
       </nav>
@@ -202,7 +206,11 @@ $publicProfileLink = app_url('index.php?admin=' . rawurlencode((string) ($adminP
           </div>
           <div class="admin-profile-row">
             <div class="admin-profile-label">Access Role</div>
-            <div class="admin-profile-value"><?php echo $isOwnerAdmin ? 'Main Owner' : 'Admin'; ?></div>
+            <div class="admin-profile-value"><?php echo htmlspecialchars($isOwnerAdmin ? 'Main Owner' : admin_role_label($currentRole), ENT_QUOTES); ?></div>
+          </div>
+          <div class="admin-profile-row">
+            <div class="admin-profile-label">Website</div>
+            <div class="admin-profile-value"><?php echo htmlspecialchars(site_restaurant_name(), ENT_QUOTES); ?></div>
           </div>
           <div class="admin-profile-row">
             <div class="admin-profile-label">Public Link</div>
@@ -235,7 +243,7 @@ $publicProfileLink = app_url('index.php?admin=' . rawurlencode((string) ($adminP
             </div>
             <div class="admin-field">
               <label>Username</label>
-              <input name="username" maxlength="100" required data-profile-input="username" value="<?php echo htmlspecialchars($_POST['username'] ?? ($adminProfile['username'] ?? ''), ENT_QUOTES); ?>">
+              <input name="username" data-rule="username" maxlength="100" required data-profile-input="username" value="<?php echo htmlspecialchars($_POST['username'] ?? ($adminProfile['username'] ?? ''), ENT_QUOTES); ?>">
             </div>
             <div class="admin-field">
               <label>Mobile Number</label>
@@ -252,11 +260,11 @@ $publicProfileLink = app_url('index.php?admin=' . rawurlencode((string) ($adminP
             </div>
             <div class="admin-field">
               <label>New Password</label>
-              <input name="new_password" type="password" autocomplete="new-password">
+              <input name="new_password" type="password" data-rule="password" minlength="8" autocomplete="new-password">
             </div>
             <div class="admin-field">
               <label>Confirm New Password</label>
-              <input name="confirm_password" type="password" autocomplete="new-password">
+              <input name="confirm_password" id="profile_confirm_password" type="password" data-rule="password" data-match="new_password" minlength="8" autocomplete="new-password">
             </div>
           </div>
           <div class="admin-form-actions" style="margin-top:14px">
@@ -303,16 +311,6 @@ $publicProfileLink = app_url('index.php?admin=' . rawurlencode((string) ($adminP
 
           const value = input.value.trim();
           preview.textContent = value || (key === "mobile" ? "Not set" : "-");
-
-          if (key === "username" || key === "mobile") {
-            const publicPreview = document.querySelector('[data-profile-preview="public_link"]');
-            if (publicPreview) {
-              const fallback = document.querySelector('[data-profile-input="mobile"]').value.trim() || input.form.querySelector('[data-profile-input="username"]').value.trim();
-              const publicUrl = <?php echo json_encode(app_url('index.php?admin=')); ?> + encodeURIComponent(fallback || '');
-              publicPreview.textContent = publicUrl;
-              publicPreview.setAttribute("href", publicUrl);
-            }
-          }
         });
       });
     })();

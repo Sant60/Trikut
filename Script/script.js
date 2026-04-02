@@ -13,6 +13,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const customerPhone = document.getElementById("custPhone");
   const deliveryType = document.getElementById("deliveryType");
   const navToggle = document.querySelector(".nav-toggle");
+  const navClose = document.querySelector(".nav-close");
   const mainNav = document.getElementById("primaryNav");
   const navBackdrop = document.querySelector(".nav-backdrop");
   const mobileNavQuery = window.matchMedia("(max-width: 1024px)");
@@ -67,11 +68,37 @@ document.addEventListener("DOMContentLoaded", () => {
       setNavOpen(!isOpen);
     });
 
+    if (navClose) {
+      navClose.addEventListener("click", () => {
+        setNavOpen(false);
+      });
+    }
+
+    mainNav.querySelectorAll("a").forEach((link) => {
+      link.addEventListener("click", () => {
+        if (mobileNavQuery.matches) {
+          setNavOpen(false);
+        }
+      });
+    });
+
     if (typeof mobileNavQuery.addEventListener === "function") {
       mobileNavQuery.addEventListener("change", () => syncNavState());
     } else if (typeof mobileNavQuery.addListener === "function") {
       mobileNavQuery.addListener(() => syncNavState());
     }
+
+    if (navBackdrop) {
+      navBackdrop.addEventListener("click", () => {
+        setNavOpen(false);
+      });
+    }
+
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && mobileNavQuery.matches) {
+        setNavOpen(false);
+      }
+    });
 
     syncNavState();
   }
@@ -107,6 +134,9 @@ document.addEventListener("DOMContentLoaded", () => {
     if (successEl) successEl.remove();
   }
 
+  const bookingName = document.getElementById("bookName");
+  const bookingPhone = document.getElementById("bookPhone");
+
   function showError(input, message) {
     if (!input) return;
     clearError(input);
@@ -134,11 +164,15 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function updateOrderButtonState() {
-    if (!orderBtn || !customerPhone) return;
+    if (!orderBtn || !customerPhone || !customerName || !deliveryType) return;
     const phoneValue = normalizePhoneValue(customerPhone.value);
     const phoneValid = /^[6-9]\d{9}$/.test(phoneValue) && !isFakePhone(phoneValue);
-    orderBtn.disabled = !phoneValid;
-    orderBtn.setAttribute("aria-disabled", String(!phoneValid));
+    const nameValid = /^[\p{L}][\p{L}\s'.-]{1,99}$/u.test(customerName.value.trim());
+    const deliveryValid = deliveryType.value.trim() !== "";
+    const cartValid = cart.length > 0;
+    const enabled = phoneValid && nameValid && deliveryValid && cartValid;
+    orderBtn.disabled = !enabled;
+    orderBtn.setAttribute("aria-disabled", String(!enabled));
   }
 
   function validateInput(input) {
@@ -209,6 +243,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (cart.length === 0) {
       cartItemsEl.innerHTML = '<p class="muted">No items added.</p>';
       cartTotalEl.textContent = formatCurrency(0);
+      updateOrderButtonState();
       return;
     }
 
@@ -236,6 +271,7 @@ document.addEventListener("DOMContentLoaded", () => {
       .join("");
 
     cartTotalEl.textContent = formatCurrency(total);
+    updateOrderButtonState();
   }
 
   function addToCart(item) {

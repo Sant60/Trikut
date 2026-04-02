@@ -40,7 +40,7 @@ function fetch_admin_profile(PDO $pdo, int $adminId): ?array
 {
     ensure_admin_profile_schema($pdo);
 
-    $stmt = $pdo->prepare('SELECT id, username, display_name, mobile, photo, created_at FROM admins WHERE id = ? LIMIT 1');
+    $stmt = $pdo->prepare('SELECT id, username, display_name, mobile, role, tenant_db, tenant_initialized, photo, created_at FROM admins WHERE id = ? LIMIT 1');
     $stmt->execute([$adminId]);
     $row = $stmt->fetch(PDO::FETCH_ASSOC);
 

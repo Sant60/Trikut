@@ -5,16 +5,22 @@ require_once __DIR__ . '/../includes/app.php';
 require_once __DIR__ . '/../includes/media.php';
 require_once __DIR__ . '/../includes/security.php';
 require_once __DIR__ . '/../includes/admin_profile.php';
-require_once __DIR__ . '/../includes/tenant.php';
+require_once __DIR__ . '/../includes/site.php';
 
 $errors = [];
 $projectRoot = dirname(__DIR__);
 $galleryDir = $projectRoot . '/assets/gallery';
 $galleryPublicDir = '/assets/gallery';
 $currentAdminId = (int) $_SESSION['admin'];
-ensure_multi_admin_schema($pdo);
+$canManageGallery = admin_can($pdo, $currentAdminId, 'manage_gallery');
+$sitePdo = site_pdo($rootPdo);
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (!$canManageGallery) {
+        http_response_code(403);
+        exit('You do not have permission to change gallery data.');
+    }
+
     if (!verify_csrf_request()) {
         $errors[] = 'Invalid request token.';
     }
@@ -32,8 +38,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         if ($imgUrl !== '') {
             try {
-                $stmt = $pdo->prepare('INSERT INTO gallery (admin_id, img, caption, created_at) VALUES (?, ?, ?, NOW())');
-                $stmt->execute([$currentAdminId, $imgUrl, $caption ?: null]);
+                $stmt = $sitePdo->prepare('INSERT INTO gallery (img, caption, created_at) VALUES (?, ?, NOW())');
+                $stmt->execute([$imgUrl, $caption ?: null]);
                 $uploadedCount++;
             } catch (Throwable $e) {
                 $errors[] = 'Database error while saving URL image.';
@@ -57,8 +63,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
 
                 try {
-                    $stmt = $pdo->prepare('INSERT INTO gallery (admin_id, img, caption, created_at) VALUES (?, ?, ?, NOW())');
-                    $stmt->execute([$currentAdminId, $storedPath, $caption ?: null]);
+                    $stmt = $sitePdo->prepare('INSERT INTO gallery (img, caption, created_at) VALUES (?, ?, NOW())');
+                    $stmt->execute([$storedPath, $caption ?: null]);
                     $uploadedCount++;
                 } catch (Throwable $e) {
                     $errors[] = 'Database error while saving uploaded image.';
@@ -79,15 +85,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $id = (int) ($_POST['id'] ?? 0);
         if ($id > 0) {
             try {
-                $stmt = $pdo->prepare('SELECT img FROM gallery WHERE id = ? AND admin_id = ? LIMIT 1');
-                $stmt->execute([$id, $currentAdminId]);
+                $stmt = $sitePdo->prepare('SELECT img FROM gallery WHERE id = ? LIMIT 1');
+                $stmt->execute([$id]);
                 $row = $stmt->fetch(PDO::FETCH_ASSOC);
                 if ($row) {
                     remove_local_project_file($row['img'] ?? '', $projectRoot);
                 }
 
-                $stmt = $pdo->prepare('DELETE FROM gallery WHERE id = ? AND admin_id = ? LIMIT 1');
-                $stmt->execute([$id, $currentAdminId]);
+                $stmt = $sitePdo->prepare('DELETE FROM gallery WHERE id = ? LIMIT 1');
+                $stmt->execute([$id]);
             } catch (Throwable $e) {
                 $errors[] = 'Failed to delete gallery image.';
             }
@@ -100,8 +106,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 $items = [];
 try {
-    $stmt = $pdo->prepare('SELECT id, img, caption, created_at FROM gallery WHERE admin_id = ? ORDER BY id DESC');
-    $stmt->execute([$currentAdminId]);
+    $stmt = $sitePdo->query('SELECT id, img, caption, created_at FROM gallery ORDER BY id DESC');
     $items = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Throwable $e) {
     $items = [];
@@ -167,10 +172,11 @@ $adminPhotoUrl = !empty($adminProfile['photo']) ? app_url($adminProfile['photo']
       <header class="admin-header">
         <div>
           <h1 class="admin-heading">Gallery</h1>
-          <div class="admin-subtitle">Upload many photos at once or add one image URL independently.</div>
+          <div class="admin-subtitle"><?php echo $canManageGallery ? 'Upload many photos at once or add one image URL independently.' : 'Read-only gallery view for employee access.'; ?></div>
         </div>
       </header>
 
+      <?php if ($canManageGallery): ?>
       <section class="admin-card">
         <h3 style="margin:0 0 10px">Add Photos</h3>
         <?php if (!empty($errors)): ?>
@@ -195,7 +201,7 @@ $adminPhotoUrl = !empty($adminProfile['photo']) ? app_url($adminProfile['photo']
           </div>
           <div class="admin-field">
             <label>Upload Gallery Images</label>
-            <input type="file" name="images[]" data-require-one="gallery-source" accept="image/jpeg,image/png,image/webp" multiple>
+            <input type="file" name="images[]" data-require-one="gallery-source" data-max-file-size="5242880" accept="image/jpeg,image/png,image/webp" multiple>
             <small>Select as many images as you want. Each image will be saved as its own gallery item.</small>
           </div>
           </div>
@@ -204,6 +210,7 @@ $adminPhotoUrl = !empty($adminProfile['photo']) ? app_url($adminProfile['photo']
           </div>
         </form>
       </section>
+      <?php endif; ?>
 
       <section class="admin-card">
         <h3 style="margin:0 0 10px">Existing Photos</h3>
@@ -221,14 +228,18 @@ $adminPhotoUrl = !empty($adminProfile['photo']) ? app_url($adminProfile['photo']
                 <?php endif; ?>
                 <div style="margin-top:8px"><?php echo htmlspecialchars($it['caption'] ?? '', ENT_QUOTES); ?></div>
                 <div class="admin-muted" style="font-size:12px;margin-top:4px"><?php echo htmlspecialchars($it['created_at'] ?? '-', ENT_QUOTES); ?></div>
-                <div style="margin-top:8px">
-                  <form method="post" style="display:inline" onsubmit="return confirm('Delete this photo?');">
-                    <?php echo csrf_input(); ?>
-                    <input type="hidden" name="action" value="delete">
-                    <input type="hidden" name="id" value="<?php echo (int) $it['id']; ?>">
-                    <button class="admin-btn-danger" type="submit">Delete</button>
-                  </form>
-                </div>
+                <?php if ($canManageGallery): ?>
+                  <div style="margin-top:8px">
+                    <form method="post" style="display:inline" onsubmit="return confirm('Delete this photo?');">
+                      <?php echo csrf_input(); ?>
+                      <input type="hidden" name="action" value="delete">
+                      <input type="hidden" name="id" value="<?php echo (int) $it['id']; ?>">
+                      <button class="admin-btn-danger" type="submit">Delete</button>
+                    </form>
+                  </div>
+                <?php else: ?>
+                  <div style="margin-top:8px" class="admin-muted">View only</div>
+                <?php endif; ?>
               </div>
             <?php endforeach; ?>
           </div>

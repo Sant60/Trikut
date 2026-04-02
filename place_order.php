@@ -1,12 +1,11 @@
 <?php
 require __DIR__ . '/includes/db.php';
+require __DIR__ . '/includes/app.php';
 require __DIR__ . '/includes/invoice.php';
 require __DIR__ . '/includes/security.php';
-require __DIR__ . '/includes/tenant.php';
+require __DIR__ . '/includes/site.php';
 
 header('Content-Type: application/json; charset=utf-8');
-
-$adminId = resolve_public_admin_id($pdo);
 
 $raw = file_get_contents('php://input');
 if (!$raw) {
@@ -28,6 +27,9 @@ if (!verify_csrf_request($csrfToken)) {
     echo json_encode(['success' => false, 'message' => 'Invalid request token.']);
     exit;
 }
+
+$siteAdminId = site_admin_id($rootPdo);
+$sitePdo = site_pdo($rootPdo);
 
 $name = normalize_text($data['name'] ?? '', 100);
 $phone = trim($data['phone'] ?? '');
@@ -65,28 +67,73 @@ if (!is_array($cart) || count($cart) === 0) {
     exit;
 }
 
-$normalizedCart = [];
-$total = 0.0;
-
+$requestedQtyById = [];
 foreach ($cart as $item) {
-    $itemName = normalize_text((string) ($item['name'] ?? ''), 120);
-    $price = (float) ($item['price'] ?? 0);
-    $qty = (int) ($item['qty'] ?? 0);
     $id = (int) ($item['id'] ?? 0);
+    $qty = (int) ($item['qty'] ?? 0);
 
-    if ($itemName === '' || $price < 0 || $price > 100000 || $qty < 1 || $qty > 99) {
-        continue;
+    if ($id <= 0 || $qty < 1 || $qty > 99) {
+        http_response_code(422);
+        echo json_encode(['success' => false, 'message' => 'Cart items are invalid.']);
+        exit;
     }
 
+    $requestedQtyById[$id] = ($requestedQtyById[$id] ?? 0) + $qty;
+    if ($requestedQtyById[$id] > 99) {
+        http_response_code(422);
+        echo json_encode(['success' => false, 'message' => 'Cart items are invalid.']);
+        exit;
+    }
+}
+
+if (empty($requestedQtyById)) {
+    http_response_code(422);
+    echo json_encode(['success' => false, 'message' => 'Cart items are invalid.']);
+    exit;
+}
+
+$placeholders = implode(',', array_fill(0, count($requestedQtyById), '?'));
+try {
+    $stmt = $sitePdo->prepare("SELECT id, name, price FROM menu WHERE active = 1 AND id IN ({$placeholders})");
+    $stmt->execute(array_keys($requestedQtyById));
+    $menuRows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Throwable $e) {
+    error_log('Menu verification failed: ' . $e->getMessage());
+    http_response_code(500);
+    echo json_encode(['success' => false, 'message' => 'Could not verify the menu items.']);
+    exit;
+}
+
+$menuById = [];
+foreach ($menuRows as $row) {
+    $menuById[(int) $row['id']] = $row;
+}
+
+if (count($menuById) !== count($requestedQtyById)) {
+    http_response_code(422);
+    echo json_encode(['success' => false, 'message' => 'One or more items are no longer available.']);
+    exit;
+}
+
+$normalizedCart = [];
+$total = 0.0;
+foreach ($requestedQtyById as $id => $qty) {
+    $menuItem = $menuById[$id] ?? null;
+    if (!$menuItem) {
+        http_response_code(422);
+        echo json_encode(['success' => false, 'message' => 'One or more items are no longer available.']);
+        exit;
+    }
+
+    $price = round((float) ($menuItem['price'] ?? 0), 2);
     $normalizedCart[] = [
         'id' => $id,
-        'name' => $itemName,
-        'price' => round($price, 2),
+        'name' => normalize_text((string) ($menuItem['name'] ?? 'Item'), 120),
+        'price' => $price,
         'qty' => $qty,
     ];
 
-    $lineTotal = round($price, 2) * $qty;
-    $total += $lineTotal;
+    $total += $price * $qty;
 }
 
 if (empty($normalizedCart)) {
@@ -101,16 +148,15 @@ $orderPayload = [
 ];
 
 try {
-    $stmt = $pdo->prepare('INSERT INTO orders (admin_id, name, phone, total, items, created_at, status) VALUES (?, ?, ?, ?, ?, NOW(), ?)');
+    $stmt = $sitePdo->prepare('INSERT INTO orders (name, phone, total, items, created_at, status) VALUES (?, ?, ?, ?, NOW(), ?)');
     $stmt->execute([
-        $adminId,
         $name,
         $normalizedPhone,
         number_format($total, 2, '.', ''),
         json_encode($orderPayload, JSON_UNESCAPED_UNICODE),
         'new',
     ]);
-    $orderId = (int) $pdo->lastInsertId();
+    $orderId = (int) $sitePdo->lastInsertId();
 } catch (Throwable $e) {
     error_log('Order insert failed: ' . $e->getMessage());
     http_response_code(500);
@@ -118,14 +164,9 @@ try {
     exit;
 }
 
-$invoiceDir = __DIR__ . '/assets/invoices';
-if (!is_dir($invoiceDir)) {
-    @mkdir($invoiceDir, 0777, true);
-}
-
 $createdAt = date('Y-m-d H:i:s');
 try {
-    $stmt = $pdo->prepare('SELECT created_at FROM orders WHERE id = ? LIMIT 1');
+    $stmt = $sitePdo->prepare('SELECT created_at FROM orders WHERE id = ? LIMIT 1');
     $stmt->execute([$orderId]);
     $row = $stmt->fetch(PDO::FETCH_ASSOC);
     if ($row && !empty($row['created_at'])) {
@@ -134,7 +175,7 @@ try {
 } catch (Throwable $e) {
 }
 
-$invoicePath = $invoiceDir . '/order_' . $orderId . '.pdf';
+$invoicePath = invoice_storage_path('order', $orderId, $siteAdminId);
 generate_order_invoice_pdf([
     'order_id' => $orderId,
     'created_at' => $createdAt,
@@ -145,10 +186,12 @@ generate_order_invoice_pdf([
     'total' => $total,
 ], $invoicePath);
 
+$invoiceToken = generate_invoice_access_token('order', $orderId, $siteAdminId, $normalizedPhone);
+
 $payload = [
     'success' => true,
     'order_id' => $orderId,
-    'invoice_url' => 'assets/invoices/order_' . $orderId . '.pdf',
+    'invoice_url' => app_url('download_invoice.php?type=order&id=' . $orderId . '&admin_id=' . $siteAdminId . '&token=' . rawurlencode($invoiceToken)),
     'message' => 'Order placed successfully. The restaurant team can now view it in the admin panel.',
 ];
 

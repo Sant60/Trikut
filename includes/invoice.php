@@ -1,5 +1,79 @@
 <?php
 
+function invoice_storage_dir(): string
+{
+    return dirname(__DIR__) . '/storage/invoices';
+}
+
+function ensure_invoice_storage_dir(): string
+{
+    $dir = invoice_storage_dir();
+    if (!is_dir($dir)) {
+        @mkdir($dir, 0777, true);
+    }
+
+    return $dir;
+}
+
+function invoice_storage_path(string $type, int $id, int $adminId): string
+{
+    $safeType = $type === 'booking' ? 'booking' : 'order';
+    return ensure_invoice_storage_dir() . '/' . $safeType . '_' . $adminId . '_' . $id . '.pdf';
+}
+
+function legacy_invoice_path(string $type, int $id): string
+{
+    $safeType = $type === 'booking' ? 'booking' : 'order';
+    return dirname(__DIR__) . '/assets/invoices/' . $safeType . '_' . $id . '.pdf';
+}
+
+function existing_invoice_path(string $type, int $id, int $adminId): string
+{
+    $primary = invoice_storage_path($type, $id, $adminId);
+    if (is_file($primary)) {
+        return $primary;
+    }
+
+    $legacy = legacy_invoice_path($type, $id);
+    return is_file($legacy) ? $legacy : $primary;
+}
+
+function invoice_secret(): string
+{
+    $secret = getenv('APP_INVOICE_SECRET') ?: getenv('APP_SECRET') ?: '';
+    if ($secret !== '') {
+        return $secret;
+    }
+
+    return 'trikut-invoice-secret-change-this';
+}
+
+function generate_invoice_access_token(string $type, int $id, int $adminId, string $phone, int $ttl = 1800): string
+{
+    $expiresAt = time() + max(60, $ttl);
+    $payload = implode('|', [$type, $id, $adminId, $phone, $expiresAt]);
+    $signature = hash_hmac('sha256', $payload, invoice_secret());
+
+    return $expiresAt . '.' . $signature;
+}
+
+function verify_invoice_access_token(string $token, string $type, int $id, int $adminId, string $phone): bool
+{
+    if ($token === '' || !str_contains($token, '.')) {
+        return false;
+    }
+
+    [$expiresAt, $signature] = explode('.', $token, 2);
+    if (!ctype_digit($expiresAt) || (int) $expiresAt < time()) {
+        return false;
+    }
+
+    $payload = implode('|', [$type, $id, $adminId, $phone, (int) $expiresAt]);
+    $expected = hash_hmac('sha256', $payload, invoice_secret());
+
+    return hash_equals($expected, $signature);
+}
+
 function invoice_ascii(string $text): string
 {
     $text = str_replace(["\r\n", "\r"], "\n", $text);

@@ -123,6 +123,11 @@ document.addEventListener("DOMContentLoaded", () => {
       return false;
     }
 
+    if (input.tagName === "SELECT" && input.required && value === "") {
+      showFieldError(input, "Please select an option.");
+      return false;
+    }
+
     if (input.type === "email" && value !== "") {
       const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
       if (!emailPattern.test(value)) {
@@ -155,6 +160,25 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     }
 
+    if (input.dataset.rule === "username" && value !== "") {
+      if (!/^[A-Za-z0-9_.-]{3,100}$/.test(value)) {
+        showFieldError(input, "Use 3 to 100 letters, numbers, dots, underscores, or hyphens.");
+        return false;
+      }
+    }
+
+    if (input.dataset.rule === "password" && value !== "") {
+      if (value.length < 8) {
+        showFieldError(input, "Use at least 8 characters.");
+        return false;
+      }
+
+      if (!/[A-Z]/.test(value) || !/[a-z]/.test(value) || !/\d/.test(value)) {
+        showFieldError(input, "Include uppercase, lowercase, and a number.");
+        return false;
+      }
+    }
+
     if (input.dataset.rule === "price" && value !== "") {
       if (!/^\d+(?:\.\d{1,2})?$/.test(value)) {
         showFieldError(input, "Enter a valid amount.");
@@ -178,6 +202,50 @@ document.addEventListener("DOMContentLoaded", () => {
       const selected = new Date(value);
       if (Number.isNaN(selected.getTime())) {
         showFieldError(input, "Select a valid date and time.");
+        return false;
+      }
+
+      if (selected.getTime() < Date.now() - 60000) {
+        showFieldError(input, "Please choose a future date and time.");
+        return false;
+      }
+    }
+
+    if (input.type === "number" && value !== "") {
+      const numericValue = Number(value);
+      const min = input.min !== "" ? Number(input.min) : null;
+      const max = input.max !== "" ? Number(input.max) : null;
+
+      if (Number.isNaN(numericValue)) {
+        showFieldError(input, "Enter a valid number.");
+        return false;
+      }
+
+      if (min !== null && numericValue < min) {
+        showFieldError(input, "Value is below the allowed minimum.");
+        return false;
+      }
+
+      if (max !== null && numericValue > max) {
+        showFieldError(input, "Value is above the allowed maximum.");
+        return false;
+      }
+    }
+
+    if (input instanceof HTMLInputElement && input.type === "file" && input.files && input.files.length > 0) {
+      const maxFileSize = Number(input.dataset.maxFileSize || 5242880);
+      for (const file of Array.from(input.files)) {
+        if (file.size > maxFileSize) {
+          showFieldError(input, "Each file must be 5 MB or smaller.");
+          return false;
+        }
+      }
+    }
+
+    if (input.dataset.match && value !== "") {
+      const target = document.getElementById(input.dataset.match) || input.form?.querySelector(`[name="${input.dataset.match}"]`);
+      if (target && value !== target.value) {
+        showFieldError(input, "This value must match.");
         return false;
       }
     }

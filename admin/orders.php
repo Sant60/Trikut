@@ -3,12 +3,20 @@ require_once __DIR__ . '/../includes/auth.php';
 require_once __DIR__ . '/../includes/db.php';
 require_once __DIR__ . '/../includes/app.php';
 require_once __DIR__ . '/../includes/security.php';
-require_once __DIR__ . '/../includes/tenant.php';
+require_once __DIR__ . '/../includes/invoice.php';
+require_once __DIR__ . '/../includes/site.php';
 
-ensure_multi_admin_schema($pdo);
+$siteAdminId = site_admin_id($rootPdo);
 $currentAdminId = (int) $_SESSION['admin'];
+$canManageOrders = admin_can($pdo, $currentAdminId, 'manage_orders');
+$sitePdo = site_pdo($rootPdo);
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (!$canManageOrders) {
+        http_response_code(403);
+        exit('You do not have permission to change order data.');
+    }
+
     $action = $_POST['action'] ?? '';
     $id = (int) ($_POST['id'] ?? 0);
 
@@ -19,11 +27,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if ($id > 0 && in_array($action, ['complete', 'delete'], true)) {
         if ($action === 'complete') {
-            $stmt = $pdo->prepare("UPDATE orders SET status = 'completed' WHERE id = ? AND admin_id = ? LIMIT 1");
-            $stmt->execute([$id, $currentAdminId]);
+            $stmt = $sitePdo->prepare("UPDATE orders SET status = 'completed' WHERE id = ? LIMIT 1");
+            $stmt->execute([$id]);
         } else {
-            $stmt = $pdo->prepare('DELETE FROM orders WHERE id = ? AND admin_id = ? LIMIT 1');
-            $stmt->execute([$id, $currentAdminId]);
+            $stmt = $sitePdo->prepare('DELETE FROM orders WHERE id = ? LIMIT 1');
+            $stmt->execute([$id]);
         }
     }
 
@@ -31,8 +39,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     exit;
 }
 
-$stmt = $pdo->prepare('SELECT id, name, phone, total, items, status, created_at FROM orders WHERE admin_id = ? ORDER BY id DESC');
-$stmt->execute([$currentAdminId]);
+$stmt = $sitePdo->query('SELECT id, name, phone, total, items, status, created_at FROM orders ORDER BY id DESC');
 $orders = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 function decode_order_items(?string $raw): array
@@ -85,7 +92,7 @@ function decode_order_items(?string $raw): array
       <div>
         <a class="admin-back-link" href="dashboard.php">&larr; Back to Dashboard</a>
         <h1 class="admin-title">Orders</h1>
-        <div class="admin-subtitle">Review new customer orders, delivery preference, item lines, and current status.</div>
+        <div class="admin-subtitle"><?php echo $canManageOrders ? 'Review new customer orders, delivery preference, item lines, and current status.' : 'Read-only customer order view for employee access.'; ?></div>
       </div>
       <button class="theme-toggle admin-theme-toggle" type="button" data-theme-toggle data-theme-storage="admin-theme" aria-pressed="false" aria-label="Switch to dark mode" title="Toggle admin light and dark mode">
         <i class="fa-solid fa-toggle-off" aria-hidden="true"></i>
@@ -115,8 +122,8 @@ function decode_order_items(?string $raw): array
               <?php foreach ($orders as $order): ?>
                 <?php $parsed = decode_order_items($order['items'] ?? ''); ?>
                 <?php
-                $invoiceRelative = 'assets/invoices/order_' . (int) $order['id'] . '.pdf';
-                $invoiceFile = dirname(__DIR__) . '/assets/invoices/order_' . (int) $order['id'] . '.pdf';
+                $invoiceUrl = app_url('download_invoice.php?type=order&id=' . (int) $order['id'] . '&admin_id=' . $siteAdminId);
+                $invoiceFile = existing_invoice_path('order', (int) $order['id'], $siteAdminId);
                 ?>
                 <tr>
                   <td>#<?php echo (int) $order['id']; ?></td>
@@ -147,7 +154,7 @@ function decode_order_items(?string $raw): array
                   <td style="font-weight:700">&#8377;<?php echo htmlspecialchars((string) ($order['total'] ?? '0.00'), ENT_QUOTES); ?></td>
                   <td>
                     <?php if (is_file($invoiceFile)): ?>
-                      <a class="admin-btn-secondary" href="<?php echo htmlspecialchars(app_url($invoiceRelative), ENT_QUOTES); ?>" target="_blank" rel="noopener">View Invoice</a>
+                      <a class="admin-btn-secondary" href="<?php echo htmlspecialchars($invoiceUrl, ENT_QUOTES); ?>" target="_blank" rel="noopener">View Invoice</a>
                     <?php else: ?>
                       <span class="admin-muted">Not generated</span>
                     <?php endif; ?>
@@ -158,22 +165,26 @@ function decode_order_items(?string $raw): array
                     </span>
                   </td>
                   <td>
-                    <div class="admin-inline-actions">
-                      <?php if (($order['status'] ?? '') !== 'completed'): ?>
-                        <form method="post">
+                    <?php if ($canManageOrders): ?>
+                      <div class="admin-inline-actions">
+                        <?php if (($order['status'] ?? '') !== 'completed'): ?>
+                          <form method="post">
+                            <?php echo csrf_input(); ?>
+                            <input type="hidden" name="id" value="<?php echo (int) $order['id']; ?>">
+                            <input type="hidden" name="action" value="complete">
+                            <button class="admin-btn-primary" type="submit">Mark Complete</button>
+                          </form>
+                        <?php endif; ?>
+                        <form method="post" onsubmit="return confirm('Delete this order?');">
                           <?php echo csrf_input(); ?>
                           <input type="hidden" name="id" value="<?php echo (int) $order['id']; ?>">
-                          <input type="hidden" name="action" value="complete">
-                          <button class="admin-btn-primary" type="submit">Mark Complete</button>
+                          <input type="hidden" name="action" value="delete">
+                          <button class="admin-btn-danger" type="submit">Delete</button>
                         </form>
-                      <?php endif; ?>
-                      <form method="post" onsubmit="return confirm('Delete this order?');">
-                        <?php echo csrf_input(); ?>
-                        <input type="hidden" name="id" value="<?php echo (int) $order['id']; ?>">
-                        <input type="hidden" name="action" value="delete">
-                        <button class="admin-btn-danger" type="submit">Delete</button>
-                      </form>
-                    </div>
+                      </div>
+                    <?php else: ?>
+                      <span class="admin-muted">View only</span>
+                    <?php endif; ?>
                   </td>
                 </tr>
               <?php endforeach; ?>

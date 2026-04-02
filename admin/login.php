@@ -28,15 +28,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $admin = false;
         }
 
-        if ($admin && isset($admin['password']) && password_verify($password, $admin['password'])) {
+        if ($admin && (int) ($admin['is_active'] ?? 1) !== 1) {
+            $error = 'This admin account has been disabled by the main owner.';
+        } elseif ($admin && isset($admin['password']) && password_verify($password, $admin['password'])) {
             session_regenerate_id(true);
             $_SESSION['admin'] = (int) $admin['id'];
-            $_SESSION['public_admin_id'] = (int) $admin['id'];
             header('Location: dashboard.php');
             exit;
+        } elseif ($error === '') {
+            $error = 'Invalid mobile number, username, or password.';
         }
-
-        $error = 'Invalid mobile number, username, or password.';
     }
 }
 ?>
@@ -66,7 +67,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       <i class="fa-solid fa-toggle-on" aria-hidden="true"></i>
     </button>
     <h1 id="loginTitle">Admin Login</h1>
-    <p class="admin-subtitle">Sign in with your username or registered mobile number to manage your own menu, gallery, bookings, and orders.</p>
+    <p class="admin-subtitle">Sign in with your username or registered mobile number to manage the restaurant website, menu, gallery, bookings, and orders.</p>
 
     <?php if ($error): ?>
       <div class="admin-error" role="alert"><?php echo htmlspecialchars($error, ENT_QUOTES); ?></div>

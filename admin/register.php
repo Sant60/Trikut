@@ -1,6 +1,7 @@
 <?php
 require_once __DIR__ . '/../includes/auth.php';
 require_once __DIR__ . '/../includes/db.php';
+require_once __DIR__ . '/../includes/app.php';
 require_once __DIR__ . '/../includes/security.php';
 require_once __DIR__ . '/../includes/tenant.php';
 
@@ -12,11 +13,13 @@ $success = '';
 $username = '';
 $displayName = '';
 $mobile = '';
+$role = 'manager';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $username = normalize_text($_POST['username'] ?? '', 100);
     $displayName = normalize_text($_POST['display_name'] ?? '', 120);
     $mobile = trim((string) ($_POST['mobile'] ?? ''));
+    $role = normalize_admin_role((string) ($_POST['role'] ?? 'manager'));
     $password = (string) ($_POST['password'] ?? '');
     $confirmPassword = (string) ($_POST['confirm_password'] ?? '');
 
@@ -27,14 +30,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } elseif ($password !== $confirmPassword) {
         $error = 'Password confirmation does not match.';
     } else {
-        $result = create_admin_account($pdo, $username, $displayName, $mobile, $password);
+        $result = create_admin_account($pdo, $username, $displayName, $mobile, $password, $role);
         if (!empty($result['errors'])) {
             $error = implode(' ', $result['errors']);
         } else {
-            $success = 'Admin account created successfully. You can now sign in with the new mobile number or username.';
+            $success = 'Admin account created successfully with the ' . admin_role_label($role) . ' role.';
             $username = '';
             $displayName = '';
             $mobile = '';
+            $role = 'manager';
         }
     }
 }
@@ -65,7 +69,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       <i class="fa-solid fa-toggle-on" aria-hidden="true"></i>
     </button>
     <h1 id="registerTitle">Add New Admin</h1>
-    <p class="admin-subtitle">Only the main owner can create a new admin. Each new admin gets a separate cafe workspace with their own menu, hero, gallery, orders, and bookings.</p>
+    <p class="admin-subtitle">Only the main owner can create new admin accounts. Use roles to control what each person can update inside the restaurant panel.</p>
 
     <?php if ($error !== ''): ?>
       <div class="admin-error" role="alert"><?php echo htmlspecialchars($error, ENT_QUOTES); ?></div>
@@ -83,7 +87,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
       <div class="admin-field">
         <label for="registerUsername">Username</label>
-        <input id="registerUsername" name="username" autocomplete="username" required value="<?php echo htmlspecialchars($username, ENT_QUOTES); ?>">
+        <input id="registerUsername" name="username" data-rule="username" maxlength="100" autocomplete="username" required value="<?php echo htmlspecialchars($username, ENT_QUOTES); ?>">
       </div>
 
       <div class="admin-field">
@@ -92,13 +96,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       </div>
 
       <div class="admin-field">
+        <label for="registerRole">Role</label>
+        <select id="registerRole" name="role" required>
+          <option value="manager"<?php echo $role === 'manager' ? ' selected' : ''; ?>>Manager</option>
+          <option value="employee"<?php echo $role === 'employee' ? ' selected' : ''; ?>>Employee</option>
+        </select>
+        <small>Managers can update restaurant data. Employees get read-only access to customer-facing records.</small>
+      </div>
+      <div class="admin-field">
         <label for="registerPassword">Password</label>
-        <input id="registerPassword" name="password" type="password" autocomplete="new-password" required>
+        <input id="registerPassword" name="password" type="password" data-rule="password" minlength="8" autocomplete="new-password" required>
       </div>
 
       <div class="admin-field">
         <label for="registerPasswordConfirm">Confirm Password</label>
-        <input id="registerPasswordConfirm" name="confirm_password" type="password" autocomplete="new-password" required>
+        <input id="registerPasswordConfirm" name="confirm_password" type="password" data-rule="password" data-match="registerPassword" minlength="8" autocomplete="new-password" required>
       </div>
 
       <div class="admin-form-actions">

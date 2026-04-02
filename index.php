@@ -3,7 +3,7 @@ require_once __DIR__ . '/includes/db.php';
 require_once __DIR__ . '/includes/app.php';
 require_once __DIR__ . '/includes/hero_media.php';
 require_once __DIR__ . '/includes/security.php';
-require_once __DIR__ . '/includes/tenant.php';
+require_once __DIR__ . '/includes/site.php';
 
 $frontend_menu = [];
 $homepage_menu = [];
@@ -16,11 +16,14 @@ $logoPath = __DIR__ . '/assets/logo.png';
 $hasLogo = is_file($logoPath);
 $styleVersion = @filemtime(__DIR__ . '/CSS/style.css') ?: time();
 $scriptVersion = @filemtime(__DIR__ . '/Script/script.js') ?: time();
-$publicAdminId = resolve_public_admin_id($pdo);
+$siteAdminId = site_admin_id($rootPdo);
+$sitePdo = site_pdo($rootPdo);
+$restaurantName = site_restaurant_name();
+$menuPageUrl = app_url('menu.php');
 
 try {
-    $menuStmt = $pdo->prepare('SELECT id, name, description, price, img FROM menu WHERE admin_id = ? AND active = 1 ORDER BY id ASC');
-    $menuStmt->execute([$publicAdminId]);
+    $menuStmt = $sitePdo->prepare('SELECT id, name, description, price, img FROM menu WHERE active = 1 ORDER BY id ASC');
+    $menuStmt->execute();
     $frontend_menu = $menuStmt->fetchAll(PDO::FETCH_ASSOC);
     $homepage_menu = array_slice($frontend_menu, 0, 4);
 } catch (Throwable $e) {
@@ -29,14 +32,14 @@ try {
 }
 
 try {
-    $frontend_hero = fetch_current_hero_media($pdo, $publicAdminId);
+    $frontend_hero = fetch_current_hero_media($sitePdo, $siteAdminId);
 } catch (Throwable $e) {
     $frontend_hero = null;
 }
 
 try {
-    $galleryStmt = $pdo->prepare('SELECT id, img, caption FROM gallery WHERE admin_id = ? ORDER BY id DESC');
-    $galleryStmt->execute([$publicAdminId]);
+    $galleryStmt = $sitePdo->prepare('SELECT id, img, caption FROM gallery ORDER BY id DESC');
+    $galleryStmt->execute();
     $frontend_gallery = $galleryStmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Throwable $e) {
     $frontend_gallery = [];
@@ -47,7 +50,7 @@ try {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Trikut Restaurant &amp; Cafe</title>
+  <title><?php echo htmlspecialchars($restaurantName, ENT_QUOTES); ?></title>
   <script>
     (function () {
       try {
@@ -73,7 +76,7 @@ try {
           <div class="logo logo-fallback">TR</div>
         <?php endif; ?>
         <div>
-          <div class="eyebrow">Trikut Restaurant &amp; Cafe</div>
+          <div class="eyebrow"><?php echo htmlspecialchars($restaurantName, ENT_QUOTES); ?></div>
         </div>
       </div>
 
@@ -102,7 +105,7 @@ try {
           <i class="fa-solid fa-xmark" aria-hidden="true"></i>
         </button>
         <nav id="primaryNav" class="main-nav" aria-label="Primary">
-          <a href="<?php echo htmlspecialchars(app_url('menu.php'), ENT_QUOTES); ?>">Menu</a>
+          <a href="<?php echo htmlspecialchars($menuPageUrl, ENT_QUOTES); ?>">Menu</a>
           <a href="#gallery">Gallery</a>
           <a href="#experience">Experience</a>
           <a class="cta" href="#book">Reserve</a>
@@ -117,9 +120,9 @@ try {
     <section class="hero-shell">
       <div class="hero-frame">
         <div class="hero-copy-card">
-          <p class="eyebrow">Fresh kitchen. Quick reservations. Admin-ready orders.</p>
-          <h1>Food that looks premium, feels local, and reaches the table fast.</h1>
-          <p class="hero-copy">Customers can browse live menu items from the database, preview your space, reserve a table, and place an order in one smooth flow.</p>
+          <p class="eyebrow"><?php echo htmlspecialchars($restaurantName, ENT_QUOTES); ?></p>
+          <h1>Order food or reserve a table in one simple flow.</h1>
+          <p class="hero-copy">Browse the menu, preview the space, and place your order without leaving the page.</p>
           <div class="hero-actions">
             <a class="hero-btn primary" href="#menu">Explore Menu</a>
             <a class="hero-btn secondary" href="#book">Book a Table</a>
@@ -127,27 +130,23 @@ try {
           <div class="hero-stats">
             <div class="stat-chip">
               <strong><?php echo count($frontend_menu); ?></strong>
-              <span>Live dishes</span>
+              <span>Menu items</span>
             </div>
             <div class="stat-chip">
               <strong><?php echo count($frontend_gallery); ?></strong>
-              <span>Gallery shots</span>
-            </div>
-            <div class="stat-chip">
-              <strong>Live</strong>
-              <span>Admin panel sync</span>
+              <span>Photos</span>
             </div>
           </div>
         </div>
 
         <div class="hero-visual">
           <?php if ($frontend_hero && !empty($frontend_hero['img'])): ?>
-            <img class="hero-image" src="<?php echo htmlspecialchars(app_url($frontend_hero['img']), ENT_QUOTES); ?>" alt="<?php echo htmlspecialchars($frontend_hero['caption'] ?? 'Restaurant hero image', ENT_QUOTES); ?>">
+            <img class="hero-image" src="<?php echo htmlspecialchars(app_url($frontend_hero['img']), ENT_QUOTES); ?>" alt="<?php echo htmlspecialchars($frontend_hero['caption'] ?? ($restaurantName . ' hero image'), ENT_QUOTES); ?>">
           <?php elseif (!empty($frontend_gallery)): ?>
             <?php $heroImage = app_url($frontend_gallery[0]['img'] ?? ''); ?>
             <img class="hero-image" src="<?php echo htmlspecialchars($heroImage, ENT_QUOTES); ?>" alt="<?php echo htmlspecialchars($frontend_gallery[0]['caption'] ?? 'Restaurant interior', ENT_QUOTES); ?>">
           <?php else: ?>
-            <div class="hero-image hero-placeholder">Trikut</div>
+            <div class="hero-image hero-placeholder"><?php echo htmlspecialchars(substr($restaurantName, 0, 24), ENT_QUOTES); ?></div>
           <?php endif; ?>
           <div class="hero-overlay">
             <p>Warm lights, crafted plates, and a dining space designed for both families and cafe guests.</p>
@@ -167,30 +166,16 @@ try {
       <div class="notice error">We could not save your booking. Please check your details and try again.</div>
     <?php endif; ?>
 
-    <section id="experience" class="experience-grid">
-      <article class="experience-card card">
-        <h2>Chef-led menu</h2>
-        <p>Each card below is loaded from your database, so the homepage stays in sync with admin updates.</p>
-      </article>
-      <article class="experience-card card">
-        <h2>Instant ordering</h2>
-        <p>Guests can build a cart, submit the order, and send it straight into the live admin panel for the restaurant team.</p>
-      </article>
-      <article class="experience-card card">
-        <h2>Simple booking</h2>
-        <p>Reservations are validated on the page, saved in MySQL, and available in the admin dashboard immediately.</p>
-      </article>
-    </section>
-
     <div class="layout">
       <section class="content">
         <section id="menu">
           <div class="section-heading">
             <div>
               <p class="eyebrow">Menu</p>
-              <h2 class="section-title">Signature dishes and cafe favorites</h2>
-              <p class="section-copy">A curated preview of popular dishes is shown here. Use the full menu page to browse everything and place your order.</p>
+              <h2 class="section-title">Popular items</h2>
+              <p class="section-copy">A quick preview of the menu. Open the full menu page to see everything.</p>
             </div>
+            <a class="restaurant-strip-link" href="<?php echo htmlspecialchars($menuPageUrl, ENT_QUOTES); ?>">Full menu</a>
           </div>
 
           <div class="menu-list">
@@ -227,7 +212,7 @@ try {
 
           <?php if (!empty($frontend_menu)): ?>
             <div class="section-footer-action">
-              <a class="hero-btn secondary section-link" href="<?php echo htmlspecialchars(app_url('menu.php'), ENT_QUOTES); ?>">See More Items</a>
+              <a class="hero-btn secondary section-link" href="<?php echo htmlspecialchars($menuPageUrl, ENT_QUOTES); ?>">See More Items</a>
             </div>
           <?php endif; ?>
         </section>
@@ -238,7 +223,7 @@ try {
               <p class="eyebrow">Gallery</p>
               <h2 class="section-title">Inside the restaurant</h2>
             </div>
-            <p class="section-copy">Tap any image to preview it larger. Uploaded gallery images now resolve correctly under your project URL.</p>
+            <p class="section-copy">A few photos of the space.</p>
           </div>
 
           <?php if (empty($frontend_gallery)): ?>
@@ -264,19 +249,13 @@ try {
       </section>
 
       <aside class="sidebar">
-        <div class="card spotlight-card">
-          <p class="eyebrow">Today&apos;s vibe</p>
-          <h3>Cozy cafe energy with full restaurant service.</h3>
-          <p>Use the booking panel for dine-in and the cart for takeaway or direct order requests.</p>
-        </div>
-
         <div class="card" id="book">
           <h3>Reserve a Table</h3>
           <form id="bookingForm" method="post" action="includes/save_booking.php" novalidate data-validate-form>
             <?php echo csrf_input(); ?>
             <div class="field-group">
               <label for="bookName">Name</label>
-              <input id="bookName" name="name" data-rule="name" placeholder="Your name" autocomplete="name" required>
+              <input id="bookName" name="name" data-rule="name" maxlength="100" placeholder="Your name" autocomplete="name" required>
             </div>
 
             <div class="field-group">
@@ -286,12 +265,12 @@ try {
 
             <div class="field-group">
               <label for="bookDate">Date and Time</label>
-              <input id="bookDate" type="datetime-local" name="date" required>
+              <input id="bookDate" type="datetime-local" name="date" step="60" required>
             </div>
 
             <div class="field-group">
               <label for="bookSize">Guests</label>
-              <input id="bookSize" type="number" name="size" value="2" min="1" required>
+              <input id="bookSize" type="number" name="size" value="2" min="1" max="20" required>
             </div>
 
             <button type="submit">Reserve Table</button>
@@ -308,7 +287,7 @@ try {
 
           <div class="field-group">
             <label for="custName">Customer Name</label>
-            <input id="custName" type="text" data-rule="name" autocomplete="name" placeholder="Your name" required>
+            <input id="custName" type="text" data-rule="name" maxlength="100" autocomplete="name" placeholder="Your name" required>
           </div>
 
           <div class="field-group">
@@ -334,9 +313,9 @@ try {
       <div class="section-heading">
         <div>
           <p class="eyebrow">Location</p>
-          <h2 class="section-title">Visit Trikut Restaurant &amp; Cafe</h2>
+          <h2 class="section-title">Visit <?php echo htmlspecialchars($restaurantName, ENT_QUOTES); ?></h2>
         </div>
-        <p class="section-copy">Find the cafe directly on Google Maps and use the embedded map below for quick directions.</p>
+        <p class="section-copy">Use the map below for directions.</p>
       </div>
 
       <div class="map-card">
@@ -348,13 +327,13 @@ try {
           allowfullscreen=""
           loading="lazy"
           referrerpolicy="no-referrer-when-downgrade"
-          title="Trikut Restaurant and Cafe Google Map"
+          title="<?php echo htmlspecialchars($restaurantName, ENT_QUOTES); ?> Google Map"
         ></iframe>
       </div>
     </section>
   </main>
 
-  <footer class="site-footer">&copy; <?php echo date('Y'); ?> Trikut Restaurant &amp; Cafe</footer>
+  <footer class="site-footer">&copy; <?php echo date('Y'); ?> <?php echo htmlspecialchars($restaurantName, ENT_QUOTES); ?></footer>
 
   <div id="imgModal" class="img-modal" aria-hidden="true">
     <button class="modal-close" type="button" aria-label="Close preview">&times;</button>
